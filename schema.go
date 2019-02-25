@@ -44,6 +44,12 @@ type SchemaAttribute struct {
 	// for any attribute that may contain passwords, private keys, etc.
 	Sensitive bool
 
+	// Description is an English language description of the meaning of values
+	// of this attribute, written as at least one full sentence with a leading
+	// capital letter and trailing period. Use multiple full sentences if any
+	// clarifying remarks are needed, but try to keep descriptions consise.
+	Description string
+
 	// ValidateFunc, if non-nil, must be set to a function that takes a single
 	// argument and returns Diagnostics. The function will be called during
 	// validation and passed a representation of the attribute value converted
@@ -65,6 +71,8 @@ type SchemaAttribute struct {
 type SchemaNestedBlockType struct {
 	Nesting SchemaNestingMode
 	Content SchemaBlockType
+
+	MaxItems, MinItems int
 }
 
 type SchemaNestingMode int

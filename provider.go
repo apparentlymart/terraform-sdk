@@ -13,7 +13,7 @@ import (
 type Provider struct {
 	ConfigSchema         *SchemaBlockType
 	ManagedResourceTypes map[string]ManagedResourceType
-	DataResourceType     map[string]DataResourceType
+	DataResourceTypes    map[string]DataResourceType
 
 	ConfigureFn interface{}
 }
@@ -25,7 +25,7 @@ type Provider struct {
 // inside this package. To implement a managed resource type, create a
 // *ResourceType value and pass it to NewManagedResourceType.
 type ManagedResourceType interface {
-	getSchema() *SchemaBlockType
+	getSchema() (schema *SchemaBlockType, version int64)
 	validate(obj cty.Value) Diagnostics
 	upgradeState(oldJSON []byte, oldVersion int) (cty.Value, Diagnostics)
 	refresh(ctx context.Context, client interface{}, old cty.Value) (cty.Value, Diagnostics)

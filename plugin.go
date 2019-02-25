@@ -56,7 +56,30 @@ type tfplugin5Server struct {
 }
 
 func (s *tfplugin5Server) GetSchema(context.Context, *tfplugin5.GetProviderSchema_Request) (*tfplugin5.GetProviderSchema_Response, error) {
-	return nil, grpc.Errorf(grpcCodes.Unimplemented, "not implemented")
+	resp := &tfplugin5.GetProviderSchema_Response{}
+
+	resp.Provider = &tfplugin5.Schema{
+		Block: convertSchemaBlockToTFPlugin5(s.p.ConfigSchema),
+	}
+
+	resp.ResourceSchemas = make(map[string]*tfplugin5.Schema)
+	for name, rt := range s.p.ManagedResourceTypes {
+		schema, version := rt.getSchema()
+		resp.ResourceSchemas[name] = &tfplugin5.Schema{
+			Version: version,
+			Block:   convertSchemaBlockToTFPlugin5(schema),
+		}
+	}
+
+	resp.DataSourceSchemas = make(map[string]*tfplugin5.Schema)
+	for name, rt := range s.p.DataResourceTypes {
+		schema := rt.getSchema()
+		resp.DataSourceSchemas[name] = &tfplugin5.Schema{
+			Block: convertSchemaBlockToTFPlugin5(schema),
+		}
+	}
+
+	return resp, nil
 }
 
 func (s *tfplugin5Server) PrepareProviderConfig(context.Context, *tfplugin5.PrepareProviderConfig_Request) (*tfplugin5.PrepareProviderConfig_Response, error) {
