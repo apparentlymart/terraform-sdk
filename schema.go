@@ -50,7 +50,7 @@ type SchemaAttribute struct {
 	// clarifying remarks are needed, but try to keep descriptions consise.
 	Description string
 
-	// ValidateFunc, if non-nil, must be set to a function that takes a single
+	// ValidateFn, if non-nil, must be set to a function that takes a single
 	// argument and returns Diagnostics. The function will be called during
 	// validation and passed a representation of the attribute value converted
 	// to the type of the function argument using package gocty.
@@ -65,7 +65,7 @@ type SchemaAttribute struct {
 	// to the given value, which will be appended to the base path by the
 	// caller during a full validation walk. For primitive values (which have
 	// no elements or attributes), set Path to nil.
-	ValidateFunc interface{}
+	ValidateFn interface{}
 }
 
 type SchemaNestedBlockType struct {
@@ -87,7 +87,7 @@ const (
 
 // Validate checks that the given object value is suitable for the recieving
 // block type, returning diagnostics if not.
-func (a *SchemaBlockType) Validate(val cty.Value) Diagnostics {
+func (b *SchemaBlockType) Validate(val cty.Value) Diagnostics {
 	var diags Diagnostics
 	if !val.Type().IsObjectType() {
 		diags = diags.Append(Diagnostic{
@@ -146,7 +146,7 @@ func (a *SchemaAttribute) Validate(val cty.Value) Diagnostics {
 	}
 
 	// The validation function gets the already-converted value, for convenience.
-	validate, err := wrapSimpleFunction(a.ValidateFunc, convVal)
+	validate, err := wrapSimpleFunction(a.ValidateFn, convVal)
 	if err != nil {
 		diags = diags.Append(Diagnostic{
 			Severity: Error,
@@ -159,4 +159,56 @@ func (a *SchemaAttribute) Validate(val cty.Value) Diagnostics {
 	moreDiags := validate()
 	diags = diags.Append(moreDiags)
 	return diags
+}
+
+// ImpliedCtyType derives a cty.Type value to represent values conforming to
+// the receiving schema. The returned type is always an object type, with its
+// attributes derived from the attributes and nested block types defined in
+// the schema.
+//
+// This corresponds with similar logic in Terraform itself, and so must be
+// compatible enough with that logic to communicate with Terraform's own
+// object serializer/deserializer.
+//
+// This function produces reasonable results only for a valid schema. Use
+// InternalValidate on the schema in provider tests to check that it is correct.
+// When called on an invalid schema, the result may be incorrect or incomplete.
+func (b *SchemaBlockType) ImpliedCtyType() cty.Type {
+	atys := make(map[string]cty.Type)
+	for name, attrS := range b.Attributes {
+		atys[name] = attrS.Type
+	}
+	for name, blockS := range b.NestedBlockTypes {
+		atys[name] = blockS.impliedCtyType()
+	}
+	return cty.Object(atys)
+}
+
+func (b *SchemaNestedBlockType) impliedCtyType() cty.Type {
+	nested := b.Content.ImpliedCtyType()
+	if b.Nesting == SchemaNestingSingle {
+		return nested // easy case
+	}
+
+	if nested.HasDynamicTypes() {
+		// If a multi-nesting block contains any dynamic-typed attributes then
+		// it'll be passed in as either a tuple or an object type with full
+		// type information in the payload, so for the purposes of our static
+		// type constraint, the whole block type attribute is itself
+		// dynamically-typed.
+		return cty.DynamicPseudoType
+	}
+
+	switch b.Nesting {
+	case SchemaNestingList:
+		return cty.List(nested)
+	case SchemaNestingSet:
+		return cty.Set(nested)
+	case SchemaNestingMap:
+		return cty.Map(nested)
+	default:
+		// Invalid, so what we return here is undefined as far as our godoc is
+		// concerned.
+		return cty.DynamicPseudoType
+	}
 }

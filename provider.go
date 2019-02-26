@@ -45,3 +45,12 @@ type DataResourceType interface {
 	validate(obj cty.Value) Diagnostics
 	read(ctx context.Context, client interface{}, config cty.Value) (cty.Value, Diagnostics)
 }
+
+// PrepareConfig accepts an object decoded from the user-provided configuration
+// (whose type must conform to the schema) and validates it, possibly also
+// altering some of the values within to produce a final configuration for
+// Terraform Core to use when interacting with this provider instance.
+func (p *Provider) PrepareConfig(proposedVal cty.Value) (cty.Value, Diagnostics) {
+	diags := p.ConfigSchema.Validate(proposedVal)
+	return proposedVal, diags
+}

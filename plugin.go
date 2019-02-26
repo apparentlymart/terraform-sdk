@@ -82,8 +82,19 @@ func (s *tfplugin5Server) GetSchema(context.Context, *tfplugin5.GetProviderSchem
 	return resp, nil
 }
 
-func (s *tfplugin5Server) PrepareProviderConfig(context.Context, *tfplugin5.PrepareProviderConfig_Request) (*tfplugin5.PrepareProviderConfig_Response, error) {
-	return nil, grpc.Errorf(grpcCodes.Unimplemented, "not implemented")
+func (s *tfplugin5Server) PrepareProviderConfig(ctx context.Context, req *tfplugin5.PrepareProviderConfig_Request) (*tfplugin5.PrepareProviderConfig_Response, error) {
+	resp := &tfplugin5.PrepareProviderConfig_Response{}
+
+	proposedVal, diags := decodeTFPlugin5DynamicValue(req.Config, s.p.ConfigSchema)
+	if diags.HasErrors() {
+		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+		return resp, nil
+	}
+
+	preparedVal, diags := s.p.PrepareConfig(proposedVal)
+	resp.PreparedConfig = encodeTFPlugin5DynamicValue(preparedVal, s.p.ConfigSchema)
+	resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+	return resp, nil
 }
 
 func (s *tfplugin5Server) ValidateResourceTypeConfig(context.Context, *tfplugin5.ValidateResourceTypeConfig_Request) (*tfplugin5.ValidateResourceTypeConfig_Response, error) {
