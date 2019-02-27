@@ -94,9 +94,56 @@ func (b *SchemaBlockType) Validate(val cty.Value) Diagnostics {
 			Severity: Error,
 			Summary:  "Invalid block object",
 			Detail:   "An object value is required to represent this block.",
-			// TODO: Path
 		})
 		return diags
+	}
+
+	// Capacity 3 here is so that we have room for a nested block type, an
+	// index, and a nested attribute name without allocating more. Each loop
+	// below will mutate this backing array but not the original empty slice.
+	path := make(cty.Path, 0, 3)
+
+	for name, attrS := range b.Attributes {
+		path := path.GetAttr(name)
+		av := val.GetAttr(name)
+		attrDiags := attrS.Validate(av)
+		diags = diags.Append(attrDiags.UnderPath(path))
+	}
+
+	for name, blockS := range b.NestedBlockTypes {
+		path := path.GetAttr(name)
+		av := val.GetAttr(name)
+
+		switch blockS.Nesting {
+		case SchemaNestingSingle:
+			blockDiags := blockS.Content.Validate(av)
+			diags = diags.Append(blockDiags.UnderPath(path))
+		case SchemaNestingList, SchemaNestingMap:
+			for it := av.ElementIterator(); it.Next(); {
+				ek, ev := it.Element()
+				path := path.Index(ek)
+				blockDiags := blockS.Content.Validate(ev)
+				diags = diags.Append(blockDiags.UnderPath(path))
+			}
+		case SchemaNestingSet:
+			// We handle sets separately because we can't describe a path
+			// through a set element (it has no key to use) and so any errors
+			// in a set block are indicated at the set itself. Nested blocks
+			// backed by sets are fraught with oddities like these, so providers
+			// should avoid using them except for historical compatibilty.
+			for it := av.ElementIterator(); it.Next(); {
+				_, ev := it.Element()
+				blockDiags := blockS.Content.Validate(ev)
+				diags = diags.Append(blockDiags.UnderPath(path))
+			}
+		default:
+			diags = diags.Append(Diagnostic{
+				Severity: Error,
+				Summary:  "Unsupported nested block mode",
+				Detail:   fmt.Sprintf("Block type %q has an unsupported nested block mode %#v. This is a bug in the provider; please report it in the provider's own issue tracker.", name, blockS.Nesting),
+				Path:     path,
+			})
+		}
 	}
 
 	return diags
@@ -135,6 +182,13 @@ func (a *SchemaAttribute) Validate(val cty.Value) Diagnostics {
 		// custom validate function, since this avoids the need for that
 		// function to be resilient to already-detected problems, and avoids
 		// producing duplicate error messages.
+		return diags
+	}
+
+	if convVal.IsNull() {
+		// Null-ness is already handled by the a.Required flag, so if an
+		// optional argument is null we'll save the validation function from
+		// having to also deal with it.
 		return diags
 	}
 
