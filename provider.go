@@ -2,7 +2,6 @@ package tfsdk
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/zclconf/go-cty/cty"
 )
@@ -56,22 +55,10 @@ func (p *Provider) PrepareConfig(proposedVal cty.Value) (cty.Value, Diagnostics)
 	return proposedVal, diags
 }
 
-// ValidateResourceTypeConfig validates the given configuration against the
-// given resource type, returning diagnostics in case of any problems.
-func (p *Provider) ValidateResourceTypeConfig(typeName string, config cty.Value) Diagnostics {
-	rt, ok := p.ManagedResourceTypes[typeName]
-	if !ok {
-		// Terraform Core should've validated this before even calling our
-		// validate function, so this error message should not be seen in
-		// practice.
-		var diags Diagnostics
-		diags = diags.Append(Diagnostic{
-			Severity: Error,
-			Summary:  "Unsupported resource type",
-			Detail:   fmt.Sprintf("This provider does not support resource type %q", typeName),
-		})
-		return diags
-	}
+func (p *Provider) ManagedResourceType(typeName string) ManagedResourceType {
+	return p.ManagedResourceTypes[typeName]
+}
 
-	return rt.validate(config)
+func (p *Provider) DataResourceType(typeName string) DataResourceType {
+	return p.DataResourceTypes[typeName]
 }

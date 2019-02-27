@@ -100,13 +100,31 @@ func (s *tfplugin5Server) PrepareProviderConfig(ctx context.Context, req *tfplug
 func (s *tfplugin5Server) ValidateResourceTypeConfig(ctx context.Context, req *tfplugin5.ValidateResourceTypeConfig_Request) (*tfplugin5.ValidateResourceTypeConfig_Response, error) {
 	resp := &tfplugin5.ValidateResourceTypeConfig_Response{}
 
-	configVal, diags := decodeTFPlugin5DynamicValue(req.Config, s.p.ConfigSchema)
+	typeName := req.TypeName
+	rt := s.p.ManagedResourceType(typeName)
+	if rt == nil {
+		// Terraform Core should've validated this before even calling our
+		// validate function, so this error message should not be seen in
+		// practice, but we will be resilient in here since this is the
+		// validate call. (Our other subsequent calls are less forgiving.)
+		var diags Diagnostics
+		diags = diags.Append(Diagnostic{
+			Severity: Error,
+			Summary:  "Unsupported resource type",
+			Detail:   fmt.Sprintf("This provider does not support resource type %q", typeName),
+		})
+		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+		return resp, nil
+	}
+
+	schema, _ := rt.getSchema()
+	configVal, diags := decodeTFPlugin5DynamicValue(req.Config, schema)
 	if diags.HasErrors() {
 		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
 		return resp, nil
 	}
 
-	diags = s.p.ValidateResourceTypeConfig(req.TypeName, configVal)
+	diags = rt.validate(configVal)
 	resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
 	return resp, nil
 }
