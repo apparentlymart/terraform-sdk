@@ -34,5 +34,9 @@ func Provider() *tfsdk.Provider {
 				},
 			},
 		},
+
+		ManagedResourceTypes: map[string]tfsdk.ManagedResourceType{
+			"test_instance": instanceManagedResourceType(),
+		},
 	}
 }

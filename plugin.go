@@ -97,8 +97,18 @@ func (s *tfplugin5Server) PrepareProviderConfig(ctx context.Context, req *tfplug
 	return resp, nil
 }
 
-func (s *tfplugin5Server) ValidateResourceTypeConfig(context.Context, *tfplugin5.ValidateResourceTypeConfig_Request) (*tfplugin5.ValidateResourceTypeConfig_Response, error) {
-	return nil, grpc.Errorf(grpcCodes.Unimplemented, "not implemented")
+func (s *tfplugin5Server) ValidateResourceTypeConfig(ctx context.Context, req *tfplugin5.ValidateResourceTypeConfig_Request) (*tfplugin5.ValidateResourceTypeConfig_Response, error) {
+	resp := &tfplugin5.ValidateResourceTypeConfig_Response{}
+
+	configVal, diags := decodeTFPlugin5DynamicValue(req.Config, s.p.ConfigSchema)
+	if diags.HasErrors() {
+		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+		return resp, nil
+	}
+
+	diags = s.p.ValidateResourceTypeConfig(req.TypeName, configVal)
+	resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+	return resp, nil
 }
 
 func (s *tfplugin5Server) ValidateDataSourceConfig(context.Context, *tfplugin5.ValidateDataSourceConfig_Request) (*tfplugin5.ValidateDataSourceConfig_Response, error) {
