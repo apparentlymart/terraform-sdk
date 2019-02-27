@@ -1,7 +1,6 @@
 package test
 
 import (
-	"fmt"
 	"net/url"
 
 	tfsdk "github.com/apparentlymart/terraform-sdk"
@@ -21,12 +20,12 @@ func Provider() *tfsdk.Provider {
 					Optional: true,
 					ValidateFn: func(v string) tfsdk.Diagnostics {
 						var diags tfsdk.Diagnostics
-						_, err := url.Parse(v)
-						if err != nil {
+						u, err := url.Parse(v)
+						if err != nil || u.Scheme != "https" {
 							diags = diags.Append(tfsdk.Diagnostic{
 								Severity: tfsdk.Error,
 								Summary:  "Invalid URL",
-								Detail:   fmt.Sprintf("A URL is required: %s.", err.Error()),
+								Detail:   "Must be a valid absolute HTTPS URL.",
 							})
 						}
 						return diags
