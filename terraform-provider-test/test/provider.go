@@ -1,9 +1,12 @@
 package test
 
 import (
+	"context"
+	"log"
 	"net/url"
 
 	tfsdk "github.com/apparentlymart/terraform-sdk"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -33,9 +36,22 @@ func Provider() *tfsdk.Provider {
 				},
 			},
 		},
+		ConfigureFn: func(ctx context.Context, config *Config) (*Client, tfsdk.Diagnostics) {
+			var diags tfsdk.Diagnostics
+			log.Printf("test provider configured with %s", spew.Sdump(config))
+			return &Client{}, diags
+		},
 
 		ManagedResourceTypes: map[string]tfsdk.ManagedResourceType{
 			"test_instance": instanceManagedResourceType(),
 		},
 	}
+}
+
+type Config struct {
+	OptionalString *string `cty:"optional_string"`
+	OptionalURL    *string `cty:"optional_url"`
+}
+
+type Client struct {
 }

@@ -17,13 +17,14 @@ import (
 // ---------------------------
 
 var diagnosticsType = reflect.TypeOf(Diagnostics(nil))
+var ctyValueType = reflect.TypeOf(cty.Value{})
 
 // wrapSimpleFunction dynamically binds the given arguments to the given
 // function, or returns a developer-oriented error describing why it cannot.
 //
 // If the requested call is valid, the result is a function that takes no
 // arguments, executes the requested call, and returns any diagnostics that
-// result.
+// result. A "simple" function returns only diagnostics.
 //
 // As a convenience, if the given function is nil then a no-op function will
 // be returned, for the common situation where a dynamic function is optional.
@@ -56,6 +57,62 @@ func wrapSimpleFunction(f interface{}, args ...interface{}) (func() Diagnostics,
 
 		out := fv.Call(convArgs)
 		return out[0].Interface().(Diagnostics)
+	}, nil
+}
+
+// wrapFunctionWithReturnValue is like wrapSimpleFunction but expects the
+// function to return another value alongside its diagnostics. The given
+// result pointer will receive the function's return value if no diagnostics
+// are returned.
+//
+// resultPtr must be a pointer, and the type of its referent must be compatible
+// with the return type of the function.
+func wrapFunctionWithReturnValue(f interface{}, resultPtr interface{}, args ...interface{}) (func() Diagnostics, error) {
+	rv := reflect.ValueOf(resultPtr)
+	if rv.Kind() != reflect.Ptr {
+		return nil, fmt.Errorf("resultPtr is %s, not Ptr", rv.Kind().String())
+	}
+	wantRT := rv.Type().Elem()
+
+	if f == nil {
+		return func() Diagnostics {
+			rv.Elem().Set(reflect.Zero(wantRT))
+			return nil
+		}, nil
+	}
+
+	fv := reflect.ValueOf(f)
+	if fv.Kind() != reflect.Func {
+		return nil, fmt.Errorf("value is %s, not Func", fv.Kind().String())
+	}
+
+	ft := fv.Type()
+	if ft.NumOut() != 2 {
+		return nil, fmt.Errorf("must have two return values")
+	}
+	if !ft.Out(1).AssignableTo(diagnosticsType) {
+		return nil, fmt.Errorf("second return value must be diagnostics")
+	}
+	if gotRT := ft.Out(0); !gotRT.AssignableTo(wantRT) {
+		return nil, fmt.Errorf("function return type %s cannot be assigned to result of type %s", gotRT, wantRT)
+	}
+
+	convArgs, forceDiags, err := prepareDynamicCallArgs(f, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return func() Diagnostics {
+		if len(forceDiags) > 0 {
+			return forceDiags
+		}
+
+		out := fv.Call(convArgs)
+		retVal := out[0]
+		diags := out[1].Interface().(Diagnostics)
+
+		rv.Elem().Set(retVal)
+		return diags
 	}, nil
 }
 

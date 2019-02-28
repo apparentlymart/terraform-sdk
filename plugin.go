@@ -137,8 +137,19 @@ func (s *tfplugin5Server) UpgradeResourceState(context.Context, *tfplugin5.Upgra
 	return nil, grpc.Errorf(grpcCodes.Unimplemented, "not implemented")
 }
 
-func (s *tfplugin5Server) Configure(context.Context, *tfplugin5.Configure_Request) (*tfplugin5.Configure_Response, error) {
-	return nil, grpc.Errorf(grpcCodes.Unimplemented, "not implemented")
+func (s *tfplugin5Server) Configure(ctx context.Context, req *tfplugin5.Configure_Request) (*tfplugin5.Configure_Response, error) {
+	resp := &tfplugin5.Configure_Response{}
+
+	configVal, diags := decodeTFPlugin5DynamicValue(req.Config, s.p.ConfigSchema)
+	if diags.HasErrors() {
+		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+		return resp, nil
+	}
+
+	stoppableCtx := s.stoppableContext(ctx)
+	diags = s.p.Configure(stoppableCtx, configVal)
+	resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+	return resp, nil
 }
 
 func (s *tfplugin5Server) ReadResource(context.Context, *tfplugin5.ReadResource_Request) (*tfplugin5.ReadResource_Response, error) {
@@ -167,6 +178,21 @@ func (s *tfplugin5Server) Stop(context.Context, *tfplugin5.Stop_Request) (*tfplu
 	// actions and returning (possibly with an error) as quickly as possible.
 	s.stop()
 	return &tfplugin5.Stop_Response{}, nil
+}
+
+// stoppableContext returns a new context that will get cancelled if either the
+// given context is cancelled or if the provider is asked to stop.
+//
+// This function starts a goroutine that exits only when the given context is
+// cancelled, so it's important that the given context be cancelled shortly
+// after the request it represents is completed.
+func (s *tfplugin5Server) stoppableContext(ctx context.Context) context.Context {
+	stoppable, cancel := context.WithCancel(s.ctx)
+	go func() {
+		<-ctx.Done()
+		cancel()
+	}()
+	return stoppable
 }
 
 // protocolVersion5 is an implementation of both plugin.Plugin and

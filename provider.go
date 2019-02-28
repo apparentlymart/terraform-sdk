@@ -2,6 +2,7 @@ package tfsdk
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/zclconf/go-cty/cty"
 )
@@ -16,6 +17,8 @@ type Provider struct {
 	DataResourceTypes    map[string]DataResourceType
 
 	ConfigureFn interface{}
+
+	client interface{}
 }
 
 // ManagedResourceType is the interface implemented by managed resource type
@@ -53,6 +56,30 @@ type DataResourceType interface {
 func (p *Provider) PrepareConfig(proposedVal cty.Value) (cty.Value, Diagnostics) {
 	diags := p.ConfigSchema.Validate(proposedVal)
 	return proposedVal, diags
+}
+
+// Configure recieves the finalized configuration for the provider and passes
+// it to the provider's configuration function to produce the client object
+// that will be recieved by the various resource operations.
+func (p *Provider) Configure(ctx context.Context, config cty.Value) Diagnostics {
+	var diags Diagnostics
+	var client interface{}
+	fn, err := wrapFunctionWithReturnValue(p.ConfigureFn, &client, ctx, config)
+	if err != nil {
+		diags = diags.Append(Diagnostic{
+			Severity: Error,
+			Summary:  "Invalid provider implementation",
+			Detail:   fmt.Sprintf("Invalid ConfigureFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err),
+		})
+		return diags
+	}
+
+	moreDiags := fn()
+	diags = diags.Append(moreDiags)
+	if !diags.HasErrors() {
+		p.client = client
+	}
+	return diags
 }
 
 func (p *Provider) ManagedResourceType(typeName string) ManagedResourceType {

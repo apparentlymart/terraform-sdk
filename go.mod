@@ -1,6 +1,7 @@
 module github.com/apparentlymart/terraform-sdk
 
 require (
+	github.com/davecgh/go-spew v1.1.0
 	github.com/golang/protobuf v1.2.0
 	github.com/google/go-cmp v0.2.0
 	github.com/hashicorp/go-plugin v0.0.0-20190220160451-3f118e8ee104
