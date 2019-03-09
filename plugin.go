@@ -82,6 +82,52 @@ func (s *tfplugin5Server) GetSchema(context.Context, *tfplugin5.GetProviderSchem
 	return resp, nil
 }
 
+// requireManagedResourceType is a helper to conveniently retrieve a particular
+// managed resource type or produce an error message if it is invalid.
+//
+// The usage pattern for this method is:
+//
+//    var rt ManagedResourceType
+//    	if rt = s.requireManagedResourceType(req.TypeName, &resp.Diagnostics); rt == nil {
+//    	return resp, nil
+//    }
+func (s *tfplugin5Server) requireManagedResourceType(typeName string, diagsPtr *[]*tfplugin5.Diagnostic) ManagedResourceType {
+	rt := s.p.ManagedResourceType(typeName)
+	if rt == nil {
+		var diags Diagnostics
+		diags = diags.Append(Diagnostic{
+			Severity: Error,
+			Summary:  "Unsupported resource type",
+			Detail:   fmt.Sprintf("This provider does not support managed resource type %q", typeName),
+		})
+		*diagsPtr = encodeDiagnosticsToTFPlugin5(diags)
+	}
+	return rt
+}
+
+// requireDataResourceType is a helper to conveniently retrieve a particular
+// data resource type or produce an error message if it is invalid.
+//
+// The usage pattern for this method is:
+//
+//    var rt DataResourceType
+//    	if rt = s.requireDataResourceType(req.TypeName, &resp.Diagnostics); rt == nil {
+//    	return resp, nil
+//    }
+func (s *tfplugin5Server) requireDataResourceType(typeName string, diagsPtr *[]*tfplugin5.Diagnostic) DataResourceType {
+	rt := s.p.DataResourceType(typeName)
+	if rt == nil {
+		var diags Diagnostics
+		diags = diags.Append(Diagnostic{
+			Severity: Error,
+			Summary:  "Unsupported resource type",
+			Detail:   fmt.Sprintf("This provider does not support data resource type %q", typeName),
+		})
+		*diagsPtr = encodeDiagnosticsToTFPlugin5(diags)
+	}
+	return rt
+}
+
 func (s *tfplugin5Server) PrepareProviderConfig(ctx context.Context, req *tfplugin5.PrepareProviderConfig_Request) (*tfplugin5.PrepareProviderConfig_Response, error) {
 	resp := &tfplugin5.PrepareProviderConfig_Response{}
 
@@ -100,20 +146,8 @@ func (s *tfplugin5Server) PrepareProviderConfig(ctx context.Context, req *tfplug
 func (s *tfplugin5Server) ValidateResourceTypeConfig(ctx context.Context, req *tfplugin5.ValidateResourceTypeConfig_Request) (*tfplugin5.ValidateResourceTypeConfig_Response, error) {
 	resp := &tfplugin5.ValidateResourceTypeConfig_Response{}
 
-	typeName := req.TypeName
-	rt := s.p.ManagedResourceType(typeName)
-	if rt == nil {
-		// Terraform Core should've validated this before even calling our
-		// validate function, so this error message should not be seen in
-		// practice, but we will be resilient in here since this is the
-		// validate call. (Our other subsequent calls are less forgiving.)
-		var diags Diagnostics
-		diags = diags.Append(Diagnostic{
-			Severity: Error,
-			Summary:  "Unsupported resource type",
-			Detail:   fmt.Sprintf("This provider does not support resource type %q", typeName),
-		})
-		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+	var rt ManagedResourceType
+	if rt = s.requireManagedResourceType(req.TypeName, &resp.Diagnostics); rt == nil {
 		return resp, nil
 	}
 
@@ -156,8 +190,47 @@ func (s *tfplugin5Server) ReadResource(context.Context, *tfplugin5.ReadResource_
 	return nil, grpc.Errorf(grpcCodes.Unimplemented, "not implemented")
 }
 
-func (s *tfplugin5Server) PlanResourceChange(context.Context, *tfplugin5.PlanResourceChange_Request) (*tfplugin5.PlanResourceChange_Response, error) {
-	return nil, grpc.Errorf(grpcCodes.Unimplemented, "not implemented")
+func (s *tfplugin5Server) PlanResourceChange(ctx context.Context, req *tfplugin5.PlanResourceChange_Request) (*tfplugin5.PlanResourceChange_Response, error) {
+	resp := &tfplugin5.PlanResourceChange_Response{}
+
+	var rt ManagedResourceType
+	if rt = s.requireManagedResourceType(req.TypeName, &resp.Diagnostics); rt == nil {
+		return resp, nil
+	}
+	schema, _ := rt.getSchema()
+
+	priorVal, diags := decodeTFPlugin5DynamicValue(req.PriorState, schema)
+	if diags.HasErrors() {
+		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+		return resp, nil
+	}
+	configVal, diags := decodeTFPlugin5DynamicValue(req.Config, schema)
+	if diags.HasErrors() {
+		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+		return resp, nil
+	}
+	proposedVal, diags := decodeTFPlugin5DynamicValue(req.ProposedNewState, schema)
+	if diags.HasErrors() {
+		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+		return resp, nil
+	}
+
+	stoppableCtx := s.stoppableContext(ctx)
+	plannedVal, diags := s.p.PlanResourceChange(stoppableCtx, rt, priorVal, configVal, proposedVal)
+
+	// Safety check
+	wantTy := schema.ImpliedCtyType()
+	for _, err := range plannedVal.Type().TestConformance(wantTy) {
+		diags = diags.Append(Diagnostic{
+			Severity: Error,
+			Summary:  "Invalid result from provider",
+			Detail:   fmt.Sprintf("Provider produced an invalid planned result for %s: %s", req.TypeName, FormatError(err)),
+		})
+	}
+
+	resp.PlannedState = encodeTFPlugin5DynamicValue(plannedVal, schema)
+	resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+	return resp, nil
 }
 
 func (s *tfplugin5Server) ApplyResourceChange(context.Context, *tfplugin5.ApplyResourceChange_Request) (*tfplugin5.ApplyResourceChange_Response, error) {

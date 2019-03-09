@@ -2,6 +2,7 @@ package tfsdk
 
 import (
 	"context"
+	"log"
 
 	"github.com/zclconf/go-cty/cty"
 )
@@ -87,7 +88,20 @@ func (rt managedResourceType) refresh(ctx context.Context, client interface{}, o
 }
 
 func (rt managedResourceType) planChange(ctx context.Context, client interface{}, prior, config, proposed cty.Value) (cty.Value, Diagnostics) {
-	return cty.NilVal, nil
+	var diags Diagnostics
+
+	// Terraform Core has already done a lot of the work in merging prior with
+	// config to produce "proposed". Our main job here is inserting any additional
+	// default values called for in the provider schema.
+	planned := rt.configSchema.ApplyDefaults(proposed)
+	log.Printf("applied defaults\n    before: %#v\n    after:  %#v", proposed, planned)
+
+	// TODO: We should also give the provider code an opportunity to make
+	// further changes to the "Computed" parts of the planned value so it
+	// can use its own logic, or possibly remote API calls, to produce the
+	// most accurate plan.
+
+	return planned, diags
 }
 
 func (rt managedResourceType) applyChange(ctx context.Context, client interface{}, prior, config, planned cty.Value) (cty.Value, Diagnostics) {

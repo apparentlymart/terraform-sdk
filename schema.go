@@ -3,6 +3,8 @@ package tfsdk
 import (
 	"fmt"
 
+	"github.com/zclconf/go-cty/cty/gocty"
+
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/convert"
 )
@@ -66,6 +68,15 @@ type SchemaAttribute struct {
 	// caller during a full validation walk. For primitive values (which have
 	// no elements or attributes), set Path to nil.
 	ValidateFn interface{}
+
+	// Default, if non-nil, must be set to a value that can be converted to
+	// the attribute's value type to be used as a default value for the
+	// (presumably optional) attribute.
+	//
+	// For attributes whose "default" values cannot be assigned statically,
+	// leave Default as nil and mark the attribute instead as Computed, allowing
+	// the value to be assigned either during planning or during apply.
+	Default interface{}
 }
 
 type SchemaNestedBlockType struct {
@@ -215,6 +226,23 @@ func (a *SchemaAttribute) Validate(val cty.Value) Diagnostics {
 	return diags
 }
 
+// DefaultValue returns the cty.Value representation of the receiving attribute's
+// default, as specified in the Default field.
+//
+// Will panic if the configured default cannot be converted to the attribute's
+// value type.
+func (a *SchemaAttribute) DefaultValue() cty.Value {
+	if a.Default == nil {
+		return cty.NullVal(a.Type)
+	}
+
+	v, err := gocty.ToCtyValue(a.Default, a.Type)
+	if err != nil {
+		panic(fmt.Sprintf("invalid default value %#v for %#v: %s", a.Default, a.Type, err))
+	}
+	return v
+}
+
 // ImpliedCtyType derives a cty.Type value to represent values conforming to
 // the receiving schema. The returned type is always an object type, with its
 // attributes derived from the attributes and nested block types defined in
@@ -264,5 +292,99 @@ func (b *SchemaNestedBlockType) impliedCtyType() cty.Type {
 		// Invalid, so what we return here is undefined as far as our godoc is
 		// concerned.
 		return cty.DynamicPseudoType
+	}
+}
+
+// ApplyDefaults takes an object value (that must conform to the receiving
+// schema) and returns a new object value where any null attribute values in
+// the given object are replaced with their default values from the schema.
+//
+// The result is guaranteed to also conform to the schema. This function may
+// panic if the schema is incorrectly specified.
+func (b *SchemaBlockType) ApplyDefaults(given cty.Value) cty.Value {
+	vals := make(map[string]cty.Value)
+
+	for name, attrS := range b.Attributes {
+		gv := given.GetAttr(name)
+		rv := gv
+		if gv.IsNull() {
+			switch {
+			case attrS.Computed:
+				rv = cty.UnknownVal(attrS.Type)
+			default:
+				rv = attrS.DefaultValue()
+			}
+		}
+		vals[name] = rv
+	}
+
+	for name, blockS := range b.NestedBlockTypes {
+		gv := given.GetAttr(name)
+		vals[name] = blockS.ApplyDefaults(gv)
+	}
+
+	return cty.ObjectVal(vals)
+}
+
+// ApplyDefaults takes a value conforming to the type that represents blocks of
+// the recieving nested block type and returns a new value, also conforming
+// to that type, with the result of SchemaBlockType.ApplyDefaults applied to
+// each element.
+//
+// This function expects that the given value will meet the guarantees offered
+// by Terraform Core for values representing nested block types: they will always
+// be known, and (aside from SchemaNestedSingle) never be null. If these
+// guarantees don't hold then this function will panic.
+func (b *SchemaNestedBlockType) ApplyDefaults(given cty.Value) cty.Value {
+	wantTy := b.impliedCtyType()
+	switch b.Nesting {
+	case SchemaNestingSingle:
+		return b.Content.ApplyDefaults(given)
+	case SchemaNestingList:
+		vals := make([]cty.Value, 0, given.LengthInt())
+		for it := given.ElementIterator(); it.Next(); {
+			_, gv := it.Element()
+			vals = append(vals, b.Content.ApplyDefaults(gv))
+		}
+		if !wantTy.IsListType() {
+			// Schema must contain dynamically-typed attributes then, so we'll
+			// return a tuple to properly capture the possibly-inconsistent
+			// element object types.
+			return cty.TupleVal(vals)
+		}
+		if len(vals) == 0 {
+			return cty.ListValEmpty(wantTy.ElementType())
+		}
+		return cty.ListVal(vals)
+	case SchemaNestingMap:
+		vals := make(map[string]cty.Value, given.LengthInt())
+		for it := given.ElementIterator(); it.Next(); {
+			k, gv := it.Element()
+			vals[k.AsString()] = b.Content.ApplyDefaults(gv)
+		}
+		if !wantTy.IsMapType() {
+			// Schema must contain dynamically-typed attributes then, so we'll
+			// return an object to properly capture the possibly-inconsistent
+			// element object types.
+			return cty.ObjectVal(vals)
+		}
+		if len(vals) == 0 {
+			return cty.MapValEmpty(wantTy.ElementType())
+		}
+		return cty.MapVal(vals)
+	case SchemaNestingSet:
+		vals := make([]cty.Value, 0, given.LengthInt())
+		for it := given.ElementIterator(); it.Next(); {
+			_, gv := it.Element()
+			vals = append(vals, b.Content.ApplyDefaults(gv))
+		}
+		// Dynamically-typed attributes are not supported with SchemaNestingSet,
+		// so we just always return a set value for these.
+		if len(vals) == 0 {
+			return cty.SetValEmpty(wantTy.ElementType())
+		}
+		return cty.SetVal(vals)
+	default:
+		panic(fmt.Sprintf("invalid block nesting mode %#v", b.Nesting))
 	}
 }

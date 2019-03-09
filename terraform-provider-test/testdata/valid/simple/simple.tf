@@ -6,6 +6,8 @@ resource "test_instance" "test" {
   image = "img-abc123"
 
   network_interface "foo" {
-    create_public_addrs = true
+  }
+  network_interface "bar" {
+    create_public_addrs = false
   }
 }

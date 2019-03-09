@@ -89,3 +89,7 @@ func (p *Provider) ManagedResourceType(typeName string) ManagedResourceType {
 func (p *Provider) DataResourceType(typeName string) DataResourceType {
 	return p.DataResourceTypes[typeName]
 }
+
+func (p *Provider) PlanResourceChange(ctx context.Context, rt ManagedResourceType, priorVal, configVal, proposedVal cty.Value) (cty.Value, Diagnostics) {
+	return rt.planChange(ctx, p.client, priorVal, configVal, proposedVal)
+}

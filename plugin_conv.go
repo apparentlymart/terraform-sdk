@@ -29,7 +29,7 @@ func convertSchemaBlockToTFPlugin5(src *SchemaBlockType) *tfplugin5.Schema_Block
 			Description: attrS.Description,
 			Required:    attrS.Required,
 			Optional:    attrS.Optional,
-			Computed:    attrS.Computed,
+			Computed:    attrS.Computed || attrS.Default != nil,
 			Sensitive:   attrS.Sensitive,
 		})
 	}
