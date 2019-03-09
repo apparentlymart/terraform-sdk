@@ -168,3 +168,28 @@ func ValidationError(err error) Diagnostic {
 		Path:     path,
 	}
 }
+
+// UpstreamAPIError is a helper for constructing a Diagnostic to report an
+// otherwise-unhandled error response from an upstream API/SDK.
+//
+// Although ideally providers will handle common error types and return
+// helpful, actionable error diagnostics for them, in practice there are always
+// errors that the provider cannot predict and, unfortunately, some SDKs do not
+// return errors in a way that allows providers to handle them carefully.
+//
+// In situations like these, pass the raw error value directly from the upstream
+// SDK to this function to produce a consistent generic error message that
+// adds the additional context about this being a problem reported by the
+// upstream API, rather than by the provider or Terraform itself directly.
+//
+// The language used in the diagnostics returned by this function is appropriate
+// only for errors returned when making calls to a remote API over a network.
+// Do not use this function for errors returned from local computation functions,
+// such as parsers, serializers, private key generators, etc.
+func UpstreamAPIError(err error) Diagnostic {
+	return Diagnostic{
+		Severity: Error,
+		Summary:  "Remote operation failed",
+		Detail:   fmt.Sprintf("The remote API returned an error that the provider was unable to handle:\n\n%s", err),
+	}
+}
