@@ -27,6 +27,17 @@ func instanceManagedResourceType() tfsdk.ManagedResourceType {
 						},
 					},
 				},
+				"access": {
+					Nesting: tfsdk.SchemaNestingSingle,
+					Content: tfsdk.SchemaBlockType{
+						Attributes: map[string]*tfsdk.SchemaAttribute{
+							"policy": {
+								Type:     cty.DynamicPseudoType,
+								Required: true,
+							},
+						},
+					},
+				},
 			},
 		},
 	})

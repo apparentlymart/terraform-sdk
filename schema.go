@@ -127,8 +127,10 @@ func (b *SchemaBlockType) Validate(val cty.Value) Diagnostics {
 
 		switch blockS.Nesting {
 		case SchemaNestingSingle:
-			blockDiags := blockS.Content.Validate(av)
-			diags = diags.Append(blockDiags.UnderPath(path))
+			if !av.IsNull() {
+				blockDiags := blockS.Content.Validate(av)
+				diags = diags.Append(blockDiags.UnderPath(path))
+			}
 		case SchemaNestingList, SchemaNestingMap:
 			for it := av.ElementIterator(); it.Next(); {
 				ek, ev := it.Element()
@@ -339,6 +341,9 @@ func (b *SchemaNestedBlockType) ApplyDefaults(given cty.Value) cty.Value {
 	wantTy := b.impliedCtyType()
 	switch b.Nesting {
 	case SchemaNestingSingle:
+		if given.IsNull() {
+			return given
+		}
 		return b.Content.ApplyDefaults(given)
 	case SchemaNestingList:
 		vals := make([]cty.Value, 0, given.LengthInt())
