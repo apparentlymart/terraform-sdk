@@ -1,6 +1,8 @@
 package test
 
 import (
+	"fmt"
+
 	tfsdk "github.com/apparentlymart/terraform-sdk"
 	"github.com/zclconf/go-cty/cty"
 )
@@ -38,11 +40,9 @@ func instanceManagedResourceType() tfsdk.ManagedResourceType {
 								ValidateFn: func(val cty.Value) tfsdk.Diagnostics {
 									var diags tfsdk.Diagnostics
 									if !(val.Type().IsObjectType() || val.Type().IsMapType()) {
-										diags = diags.Append(tfsdk.Diagnostic{
-											Severity: tfsdk.Error,
-											Summary:  "Invalid policy",
-											Detail:   "Policy value must be an object (using { ... } syntax).",
-										})
+										diags = diags.Append(
+											tfsdk.ValidationError(fmt.Errorf("must be an object, using { ... } syntax")),
+										)
 									}
 									return diags
 								},

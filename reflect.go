@@ -150,8 +150,8 @@ func prepareDynamicCallArgs(f interface{}, args ...interface{}) ([]reflect.Value
 				// ensure that all user-supplyable values can be accepted.
 				forceDiags = forceDiags.Append(Diagnostic{
 					Severity: Error,
-					Summary:  "Invalid argument value",
-					Detail:   fmt.Sprintf("Invalid value: %s.", FormatError(err)),
+					Summary:  "Unsuitable argument value",
+					Detail:   fmt.Sprintf("This value cannot be used: %s.", FormatError(err)),
 				})
 			}
 			convArgs[i] = targetVal.Elem() // New created a pointer, but we want the referent

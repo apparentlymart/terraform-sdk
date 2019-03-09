@@ -186,7 +186,7 @@ func (a *SchemaAttribute) Validate(val cty.Value) Diagnostics {
 		diags = diags.Append(Diagnostic{
 			Severity: Error,
 			Summary:  "Invalid argument value",
-			Detail:   fmt.Sprintf("Incorrect value type: %s.", err),
+			Detail:   fmt.Sprintf("Incorrect value type: %s.", FormatError(err)),
 		})
 	}
 

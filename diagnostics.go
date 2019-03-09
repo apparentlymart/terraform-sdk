@@ -143,3 +143,28 @@ func FormatPath(path cty.Path) string {
 	}
 	return buf.String()
 }
+
+// ValidationError is a helper for constructing a Diagnostic to report an
+// unsuitable value inside an attribute's ValidateFn.
+//
+// Use this function when reporting "unsuitable value" errors to ensure a
+// consistent user experience across providers. The error message for the given
+// error must make sense when used after a colon in a full English sentence.
+//
+// If the given error is a cty.PathError then it is assumed to be relative to
+// the value being validated and will be reported in that context. This will
+// be the case automatically if the cty.Value passed to the ValidateFn is used
+// with functions from the cty "convert" and "gocty" packages.
+func ValidationError(err error) Diagnostic {
+	var path cty.Path
+	if pErr, ok := err.(cty.PathError); ok {
+		path = pErr.Path
+	}
+
+	return Diagnostic{
+		Severity: Error,
+		Summary:  "Unsuitable argument value",
+		Detail:   fmt.Sprintf("This value cannot be used: %s.", FormatError(err)),
+		Path:     path,
+	}
+}
