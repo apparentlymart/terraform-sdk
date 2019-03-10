@@ -245,6 +245,16 @@ func (a *SchemaAttribute) DefaultValue() cty.Value {
 	return v
 }
 
+// Null returns a null value of the type implied by the receiving schema.
+func (b *SchemaBlockType) Null() cty.Value {
+	return cty.NullVal(b.ImpliedCtyType())
+}
+
+// Unknown returns an unknown value of the type implied by the receiving schema.
+func (b *SchemaBlockType) Unknown() cty.Value {
+	return cty.UnknownVal(b.ImpliedCtyType())
+}
+
 // ImpliedCtyType derives a cty.Type value to represent values conforming to
 // the receiving schema. The returned type is always an object type, with its
 // attributes derived from the attributes and nested block types defined in

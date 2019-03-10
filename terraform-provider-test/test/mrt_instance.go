@@ -1,11 +1,30 @@
 package test
 
 import (
+	"context"
 	"fmt"
+	"log"
 
 	tfsdk "github.com/apparentlymart/terraform-sdk"
 	"github.com/zclconf/go-cty/cty"
 )
+
+type instanceMRT struct {
+	ID    *string `cty:"id"`
+	Type  string  `cty:"type"`
+	Image string  `cty:"image"`
+
+	Access            *instanceMRTAccess             `cty:"access"`
+	NetworkInterfaces []*instanceMRTNetworkInterface `cty:"network_interface"`
+}
+
+type instanceMRTNetworkInterface struct {
+	CreatePublicAddrs bool `cty:"create_public_addrs"`
+}
+
+type instanceMRTAccess struct {
+	Policy cty.Value `cty:"policy"`
+}
 
 func instanceManagedResourceType() tfsdk.ManagedResourceType {
 	return tfsdk.NewManagedResourceType(&tfsdk.ResourceType{
@@ -51,6 +70,11 @@ func instanceManagedResourceType() tfsdk.ManagedResourceType {
 					},
 				},
 			},
+		},
+
+		CreateFn: func(ctx context.Context, new *instanceMRT) (*instanceMRT, tfsdk.Diagnostics) {
+			log.Printf("creating %#v", new)
+			return new, nil
 		},
 	})
 }

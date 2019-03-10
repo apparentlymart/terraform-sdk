@@ -224,7 +224,7 @@ func (s *tfplugin5Server) PlanResourceChange(ctx context.Context, req *tfplugin5
 		diags = diags.Append(Diagnostic{
 			Severity: Error,
 			Summary:  "Invalid result from provider",
-			Detail:   fmt.Sprintf("Provider produced an invalid planned result for %s: %s", req.TypeName, FormatError(err)),
+			Detail:   fmt.Sprintf("Provider produced an invalid planned new object for %s: %s", req.TypeName, FormatError(err)),
 		})
 	}
 
@@ -233,8 +233,42 @@ func (s *tfplugin5Server) PlanResourceChange(ctx context.Context, req *tfplugin5
 	return resp, nil
 }
 
-func (s *tfplugin5Server) ApplyResourceChange(context.Context, *tfplugin5.ApplyResourceChange_Request) (*tfplugin5.ApplyResourceChange_Response, error) {
-	return nil, grpc.Errorf(grpcCodes.Unimplemented, "not implemented")
+func (s *tfplugin5Server) ApplyResourceChange(ctx context.Context, req *tfplugin5.ApplyResourceChange_Request) (*tfplugin5.ApplyResourceChange_Response, error) {
+	resp := &tfplugin5.ApplyResourceChange_Response{}
+
+	var rt ManagedResourceType
+	if rt = s.requireManagedResourceType(req.TypeName, &resp.Diagnostics); rt == nil {
+		return resp, nil
+	}
+	schema, _ := rt.getSchema()
+
+	priorVal, diags := decodeTFPlugin5DynamicValue(req.PriorState, schema)
+	if diags.HasErrors() {
+		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+		return resp, nil
+	}
+	plannedVal, diags := decodeTFPlugin5DynamicValue(req.PlannedState, schema)
+	if diags.HasErrors() {
+		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+		return resp, nil
+	}
+
+	stoppableCtx := s.stoppableContext(ctx)
+	newVal, diags := s.p.ApplyResourceChange(stoppableCtx, rt, priorVal, plannedVal)
+
+	// Safety check
+	wantTy := schema.ImpliedCtyType()
+	for _, err := range plannedVal.Type().TestConformance(wantTy) {
+		diags = diags.Append(Diagnostic{
+			Severity: Error,
+			Summary:  "Invalid result from provider",
+			Detail:   fmt.Sprintf("Provider produced an invalid new object for %s: %s", req.TypeName, FormatError(err)),
+		})
+	}
+
+	resp.NewState = encodeTFPlugin5DynamicValue(newVal, schema)
+	resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+	return resp, nil
 }
 
 func (s *tfplugin5Server) ImportResourceState(context.Context, *tfplugin5.ImportResourceState_Request) (*tfplugin5.ImportResourceState_Response, error) {

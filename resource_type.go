@@ -2,8 +2,9 @@ package tfsdk
 
 import (
 	"context"
-	"log"
+	"fmt"
 
+	"github.com/apparentlymart/terraform-sdk/internal/dynfunc"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -16,6 +17,51 @@ import (
 type ResourceType struct {
 	ConfigSchema  *SchemaBlockType
 	SchemaVersion int64 // Only used for managed resource types; leave as zero otherwise
+
+	// CreateFn is a function called when creating an instance of your resource
+	// type for the first time. It must be a function compatible with the
+	// following signature:
+	//
+	//     func (ctx context.Context, planned cty.Value) (new cty.Value, diags tfsdk.Diagnostics)
+	//
+	// If the create was not completely successful, you may still return a
+	// partially-created object alongside error diagnostics to retain the parts
+	// that _were_ created.
+	CreateFn interface{}
+
+	// ReadFn is a function called to read the current upstream values for an
+	// instance of your resource type. It must be a function compatible with the
+	// following signature:
+	//
+	//     func (ctx context.Context, prior cty.Value) (new cty.Value, diags tfsdk.Diagnostics)
+	//
+	// If the given object appears to have been deleted upstream, return a null
+	// value to indicate that. The object will then be removed from the Terraform
+	// state.
+	ReadFn interface{}
+
+	// UpdateFn is a function called when performing an in-place update of an
+	// instance of your resource type. It must be a function compatible with the
+	// following signature:
+	//
+	//     func (ctx context.Context, prior cty.Value, planned cty.Value) (new cty.Value, diags tfsdk.Diagnostics)
+	//
+	// If the update is not completely successful, you may still return a
+	// partially-updated object alongside error diagnostics to retain the
+	// parts that _were_ updated. If error diagnostics are returned and the
+	// returned value is null then we assume that the update failed completely
+	// and retain the prior value in the Terraform state.
+	UpdateFn interface{}
+
+	// DeleteFn is a function called to delete an instance of your resource type.
+	// It must be a function compatible with the following signature:
+	//
+	//     func (ctx context.Context, prior cty.Value) tfsdk.Diagnostics
+	//
+	// If error diagnostics are returned, the SDK will assume that the delete
+	// failed and that the object still exists. If it actually was deleted
+	// before the failure, this should be detected on the next Read call.
+	DeleteFn interface{}
 }
 
 // NewManagedResourceType prepares a ManagedResourceType implementation using
@@ -38,6 +84,11 @@ func NewManagedResourceType(def *ResourceType) ManagedResourceType {
 
 	return managedResourceType{
 		configSchema: schema,
+
+		createFn: def.CreateFn,
+		readFn:   def.ReadFn,
+		updateFn: def.UpdateFn,
+		deleteFn: def.DeleteFn,
 	}
 }
 
@@ -69,6 +120,8 @@ func NewDataResourceType(def *ResourceType) DataResourceType {
 type managedResourceType struct {
 	configSchema  *SchemaBlockType
 	schemaVersion int64
+
+	createFn, readFn, updateFn, deleteFn interface{}
 }
 
 func (rt managedResourceType) getSchema() (schema *SchemaBlockType, version int64) {
@@ -94,7 +147,6 @@ func (rt managedResourceType) planChange(ctx context.Context, client interface{}
 	// config to produce "proposed". Our main job here is inserting any additional
 	// default values called for in the provider schema.
 	planned := rt.configSchema.ApplyDefaults(proposed)
-	log.Printf("applied defaults\n    before: %#v\n    after:  %#v", proposed, planned)
 
 	// TODO: We should also give the provider code an opportunity to make
 	// further changes to the "Computed" parts of the planned value so it
@@ -104,8 +156,56 @@ func (rt managedResourceType) planChange(ctx context.Context, client interface{}
 	return planned, diags
 }
 
-func (rt managedResourceType) applyChange(ctx context.Context, client interface{}, prior, config, planned cty.Value) (cty.Value, Diagnostics) {
-	return cty.NilVal, nil
+func (rt managedResourceType) applyChange(ctx context.Context, client interface{}, prior, planned cty.Value) (cty.Value, Diagnostics) {
+	var diags Diagnostics
+	var new cty.Value
+
+	// We could actually be doing either a Create, an Update, or a Delete here
+	// depending on the null-ness of the values we've been given. At least one
+	// of them will always be non-null.
+	var fn func() Diagnostics
+	var err error
+	var errMsg string
+	switch {
+	case prior.IsNull():
+		fn, err = dynfunc.WrapFunctionWithReturnValue(rt.createFn, &new, ctx, planned)
+		if err != nil {
+			errMsg = fmt.Sprintf("Invalid CreateFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err)
+		}
+	case planned.IsNull():
+		fn, err = dynfunc.WrapFunctionWithReturnValue(rt.deleteFn, &new, ctx, prior)
+		if err != nil {
+			errMsg = fmt.Sprintf("Invalid DeleteFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err)
+		}
+	default:
+		fn, err = dynfunc.WrapFunctionWithReturnValue(rt.updateFn, &new, ctx, prior, planned)
+		if err != nil {
+			errMsg = fmt.Sprintf("Invalid UpdateFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err)
+		}
+	}
+	if err != nil {
+		diags = diags.Append(Diagnostic{
+			Severity: Error,
+			Summary:  "Invalid provider implementation",
+			Detail:   errMsg,
+		})
+		return rt.configSchema.Null(), diags
+	}
+
+	moreDiags := fn()
+	diags = diags.Append(moreDiags)
+
+	// We'll make life easier on the provider implementer by normalizing null
+	// and unknown values to the correct type automatically, so they can just
+	// return dynamically-typed nulls and unknowns.
+	switch {
+	case new.IsNull():
+		new = rt.configSchema.Null()
+	case !new.IsKnown():
+		new = rt.configSchema.Unknown()
+	}
+
+	return new, diags
 }
 
 func (rt managedResourceType) importState(ctx context.Context, client interface{}, id string) (cty.Value, Diagnostics) {

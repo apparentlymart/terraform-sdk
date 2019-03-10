@@ -34,7 +34,7 @@ type ManagedResourceType interface {
 	upgradeState(oldJSON []byte, oldVersion int) (cty.Value, Diagnostics)
 	refresh(ctx context.Context, client interface{}, old cty.Value) (cty.Value, Diagnostics)
 	planChange(ctx context.Context, client interface{}, prior, config, proposed cty.Value) (cty.Value, Diagnostics)
-	applyChange(ctx context.Context, client interface{}, prior, config, planned cty.Value) (cty.Value, Diagnostics)
+	applyChange(ctx context.Context, client interface{}, prior, planned cty.Value) (cty.Value, Diagnostics)
 	importState(ctx context.Context, client interface{}, id string) (cty.Value, Diagnostics)
 }
 
@@ -93,4 +93,8 @@ func (p *Provider) DataResourceType(typeName string) DataResourceType {
 
 func (p *Provider) PlanResourceChange(ctx context.Context, rt ManagedResourceType, priorVal, configVal, proposedVal cty.Value) (cty.Value, Diagnostics) {
 	return rt.planChange(ctx, p.client, priorVal, configVal, proposedVal)
+}
+
+func (p *Provider) ApplyResourceChange(ctx context.Context, rt ManagedResourceType, priorVal, plannedVal cty.Value) (cty.Value, Diagnostics) {
+	return rt.applyChange(ctx, p.client, priorVal, plannedVal)
 }
