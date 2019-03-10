@@ -3,10 +3,10 @@ package tfsdk
 import (
 	"fmt"
 
-	"github.com/zclconf/go-cty/cty/gocty"
-
+	"github.com/apparentlymart/terraform-sdk/internal/dynfunc"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/convert"
+	"github.com/zclconf/go-cty/cty/gocty"
 )
 
 type SchemaBlockType struct {
@@ -213,7 +213,7 @@ func (a *SchemaAttribute) Validate(val cty.Value) Diagnostics {
 	}
 
 	// The validation function gets the already-converted value, for convenience.
-	validate, err := wrapSimpleFunction(a.ValidateFn, convVal)
+	validate, err := dynfunc.WrapSimpleFunction(a.ValidateFn, convVal)
 	if err != nil {
 		diags = diags.Append(Diagnostic{
 			Severity: Error,

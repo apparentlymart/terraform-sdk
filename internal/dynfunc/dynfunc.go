@@ -1,36 +1,30 @@
-package tfsdk
+package dynfunc
 
 import (
 	"fmt"
 	"reflect"
 
+	"github.com/apparentlymart/terraform-sdk/internal/sdkdiags"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/gocty"
 )
 
-// ---------------------------
-// This file contains some helpers for some reflection-driven dynamic behaviors
-// we need to do elsewhere in the SDK, in an attempt to keep the main SDK code
-// relatively easy to read.
-//
-// There should be no exported symbols in this file.
-// ---------------------------
-
-var diagnosticsType = reflect.TypeOf(Diagnostics(nil))
+var diagnosticsType = reflect.TypeOf(sdkdiags.Diagnostics(nil))
 var ctyValueType = reflect.TypeOf(cty.Value{})
 
-// wrapSimpleFunction dynamically binds the given arguments to the given
+// WrapSimpleFunction dynamically binds the given arguments to the given
 // function, or returns a developer-oriented error describing why it cannot.
+// The given function must return only a tfsdk.Diagnostics value.
 //
 // If the requested call is valid, the result is a function that takes no
 // arguments, executes the requested call, and returns any diagnostics that
-// result. A "simple" function returns only diagnostics.
+// result.
 //
 // As a convenience, if the given function is nil then a no-op function will
 // be returned, for the common situation where a dynamic function is optional.
-func wrapSimpleFunction(f interface{}, args ...interface{}) (func() Diagnostics, error) {
+func WrapSimpleFunction(f interface{}, args ...interface{}) (func() sdkdiags.Diagnostics, error) {
 	if f == nil {
-		return func() Diagnostics {
+		return func() sdkdiags.Diagnostics {
 			return nil
 		}, nil
 	}
@@ -50,24 +44,24 @@ func wrapSimpleFunction(f interface{}, args ...interface{}) (func() Diagnostics,
 		return nil, err
 	}
 
-	return func() Diagnostics {
+	return func() sdkdiags.Diagnostics {
 		if len(forceDiags) > 0 {
 			return forceDiags
 		}
 
 		out := fv.Call(convArgs)
-		return out[0].Interface().(Diagnostics)
+		return out[0].Interface().(sdkdiags.Diagnostics)
 	}, nil
 }
 
-// wrapFunctionWithReturnValue is like wrapSimpleFunction but expects the
+// WrapFunctionWithReturnValue is like WrapSimpleFunction but expects the
 // function to return another value alongside its diagnostics. The given
 // result pointer will receive the function's return value if no diagnostics
 // are returned.
 //
-// resultPtr must be a pointer, and the type of its referent must be compatible
-// with the return type of the function.
-func wrapFunctionWithReturnValue(f interface{}, resultPtr interface{}, args ...interface{}) (func() Diagnostics, error) {
+// resultPtr must be a pointer, and the return type of the function must be
+// compatible with resultPtr's referent.
+func WrapFunctionWithReturnValue(f interface{}, resultPtr interface{}, args ...interface{}) (func() sdkdiags.Diagnostics, error) {
 	rv := reflect.ValueOf(resultPtr)
 	if rv.Kind() != reflect.Ptr {
 		return nil, fmt.Errorf("resultPtr is %s, not Ptr", rv.Kind().String())
@@ -75,7 +69,7 @@ func wrapFunctionWithReturnValue(f interface{}, resultPtr interface{}, args ...i
 	wantRT := rv.Type().Elem()
 
 	if f == nil {
-		return func() Diagnostics {
+		return func() sdkdiags.Diagnostics {
 			rv.Elem().Set(reflect.Zero(wantRT))
 			return nil
 		}, nil
@@ -102,21 +96,21 @@ func wrapFunctionWithReturnValue(f interface{}, resultPtr interface{}, args ...i
 		return nil, err
 	}
 
-	return func() Diagnostics {
+	return func() sdkdiags.Diagnostics {
 		if len(forceDiags) > 0 {
 			return forceDiags
 		}
 
 		out := fv.Call(convArgs)
 		retVal := out[0]
-		diags := out[1].Interface().(Diagnostics)
+		diags := out[1].Interface().(sdkdiags.Diagnostics)
 
 		rv.Elem().Set(retVal)
 		return diags
 	}, nil
 }
 
-func prepareDynamicCallArgs(f interface{}, args ...interface{}) ([]reflect.Value, Diagnostics, error) {
+func prepareDynamicCallArgs(f interface{}, args ...interface{}) ([]reflect.Value, sdkdiags.Diagnostics, error) {
 	fv := reflect.ValueOf(f)
 	if fv.Kind() != reflect.Func {
 		return nil, nil, fmt.Errorf("value is %s, not Func", fv.Kind().String())
@@ -129,7 +123,7 @@ func prepareDynamicCallArgs(f interface{}, args ...interface{}) ([]reflect.Value
 		return nil, nil, fmt.Errorf("should have %d arguments, but has %d", want, got)
 	}
 
-	var forceDiags Diagnostics
+	var forceDiags sdkdiags.Diagnostics
 
 	convArgs := make([]reflect.Value, len(args))
 	for i, rawArg := range args {
@@ -148,10 +142,10 @@ func prepareDynamicCallArgs(f interface{}, args ...interface{}) ([]reflect.Value
 				// so our error message is necessarily generic. Providers should
 				// generally not rely on this error form and should instead
 				// ensure that all user-supplyable values can be accepted.
-				forceDiags = forceDiags.Append(Diagnostic{
-					Severity: Error,
+				forceDiags = forceDiags.Append(sdkdiags.Diagnostic{
+					Severity: sdkdiags.Error,
 					Summary:  "Unsuitable argument value",
-					Detail:   fmt.Sprintf("This value cannot be used: %s.", FormatError(err)),
+					Detail:   fmt.Sprintf("This value cannot be used: %s.", sdkdiags.FormatError(err)),
 				})
 			}
 			convArgs[i] = targetVal.Elem() // New created a pointer, but we want the referent

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/apparentlymart/terraform-sdk/internal/dynfunc"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -64,7 +65,7 @@ func (p *Provider) PrepareConfig(proposedVal cty.Value) (cty.Value, Diagnostics)
 func (p *Provider) Configure(ctx context.Context, config cty.Value) Diagnostics {
 	var diags Diagnostics
 	var client interface{}
-	fn, err := wrapFunctionWithReturnValue(p.ConfigureFn, &client, ctx, config)
+	fn, err := dynfunc.WrapFunctionWithReturnValue(p.ConfigureFn, &client, ctx, config)
 	if err != nil {
 		diags = diags.Append(Diagnostic{
 			Severity: Error,
