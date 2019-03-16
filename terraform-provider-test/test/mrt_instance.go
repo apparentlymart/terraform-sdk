@@ -14,8 +14,8 @@ type instanceMRT struct {
 	Type  string  `cty:"type"`
 	Image string  `cty:"image"`
 
-	Access            *instanceMRTAccess             `cty:"access"`
-	NetworkInterfaces []*instanceMRTNetworkInterface `cty:"network_interface"`
+	Access            *instanceMRTAccess                      `cty:"access"`
+	NetworkInterfaces map[string]*instanceMRTNetworkInterface `cty:"network_interface"`
 }
 
 type instanceMRTNetworkInterface struct {

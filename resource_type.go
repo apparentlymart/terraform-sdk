@@ -158,27 +158,47 @@ func (rt managedResourceType) planChange(ctx context.Context, client interface{}
 
 func (rt managedResourceType) applyChange(ctx context.Context, client interface{}, prior, planned cty.Value) (cty.Value, Diagnostics) {
 	var diags Diagnostics
-	var new cty.Value
+	wantTy := rt.configSchema.ImpliedCtyType()
+
+	// The planned object will contain unknown values for anything that is to
+	// be determined during the apply step, but we'll replace these with nulls
+	// before calling the provider's operation implementation functions so that
+	// they can easily use gocty to work with the whole object and not get
+	// tripped up with dealing with those unknown values.
+	//
+	// FIXME: This is a bit unfortunate because it means that the apply functions
+	// can't easily tell the difference between something that was returned as
+	// explicitly null in the plan vs. being unknown, but we're accepting that
+	// for now because it seems unlikely that such a distinction would ever
+	// matter in practice: the plan logic should just be consistent about whether
+	// a particular attribute becomes unknown when it's unset. We might need to
+	// do something better here if real-world experience indicates otherwise.
+	//
+	// This will also cause set values that differ only by being unknown to
+	// be conflated together, but we're ignoring that here because we want to
+	// phase out the idea of set-backed blocks with unknown attributes inside:
+	// they cause too much ambiguity in our diffing logic.
+	planned = cty.UnknownAsNull(planned)
 
 	// We could actually be doing either a Create, an Update, or a Delete here
 	// depending on the null-ness of the values we've been given. At least one
 	// of them will always be non-null.
-	var fn func() Diagnostics
+	var fn func() (cty.Value, Diagnostics)
 	var err error
 	var errMsg string
 	switch {
 	case prior.IsNull():
-		fn, err = dynfunc.WrapFunctionWithReturnValue(rt.createFn, &new, ctx, planned)
+		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.createFn, wantTy, ctx, planned)
 		if err != nil {
 			errMsg = fmt.Sprintf("Invalid CreateFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err)
 		}
 	case planned.IsNull():
-		fn, err = dynfunc.WrapFunctionWithReturnValue(rt.deleteFn, &new, ctx, prior)
+		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.deleteFn, wantTy, ctx, prior)
 		if err != nil {
 			errMsg = fmt.Sprintf("Invalid DeleteFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err)
 		}
 	default:
-		fn, err = dynfunc.WrapFunctionWithReturnValue(rt.updateFn, &new, ctx, prior, planned)
+		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.updateFn, wantTy, ctx, prior, planned)
 		if err != nil {
 			errMsg = fmt.Sprintf("Invalid UpdateFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err)
 		}
@@ -192,20 +212,20 @@ func (rt managedResourceType) applyChange(ctx context.Context, client interface{
 		return rt.configSchema.Null(), diags
 	}
 
-	moreDiags := fn()
+	newVal, moreDiags := fn()
 	diags = diags.Append(moreDiags)
 
 	// We'll make life easier on the provider implementer by normalizing null
 	// and unknown values to the correct type automatically, so they can just
 	// return dynamically-typed nulls and unknowns.
 	switch {
-	case new.IsNull():
-		new = rt.configSchema.Null()
-	case !new.IsKnown():
-		new = rt.configSchema.Unknown()
+	case newVal.IsNull():
+		newVal = cty.NullVal(wantTy)
+	case !newVal.IsKnown():
+		newVal = cty.UnknownVal(wantTy)
 	}
 
-	return new, diags
+	return newVal, diags
 }
 
 func (rt managedResourceType) importState(ctx context.Context, client interface{}, id string) (cty.Value, Diagnostics) {

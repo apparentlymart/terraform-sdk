@@ -110,6 +110,71 @@ func WrapFunctionWithReturnValue(f interface{}, resultPtr interface{}, args ...i
 	}, nil
 }
 
+// WrapFunctionWithReturnValueCty is like WrapFunctionWithReturnValue but with
+// the return value specified as a cty value type rather than a Go pointer.
+//
+// Returns a function that will call the wrapped function, convert its result
+// to cty.Value using gocty, and return it.
+func WrapFunctionWithReturnValueCty(f interface{}, wantTy cty.Type, args ...interface{}) (func() (cty.Value, sdkdiags.Diagnostics), error) {
+	if f == nil {
+		return func() (cty.Value, sdkdiags.Diagnostics) {
+			return cty.NullVal(wantTy), nil
+		}, nil
+	}
+
+	fv := reflect.ValueOf(f)
+	if fv.Kind() != reflect.Func {
+		return nil, fmt.Errorf("value is %s, not Func", fv.Kind().String())
+	}
+
+	ft := fv.Type()
+	if ft.NumOut() != 2 {
+		return nil, fmt.Errorf("must have two return values")
+	}
+	if !ft.Out(1).AssignableTo(diagnosticsType) {
+		return nil, fmt.Errorf("second return value must be diagnostics")
+	}
+	gotRT := ft.Out(0)
+	passthruResult := false
+	if ctyValueType.AssignableTo(gotRT) {
+		passthruResult = true
+	}
+
+	convArgs, forceDiags, err := prepareDynamicCallArgs(f, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return func() (cty.Value, sdkdiags.Diagnostics) {
+		if len(forceDiags) > 0 {
+			return cty.NullVal(wantTy), forceDiags
+		}
+
+		out := fv.Call(convArgs)
+		retValRaw := out[0].Interface()
+		diags := out[1].Interface().(sdkdiags.Diagnostics)
+		if passthruResult {
+			return retValRaw.(cty.Value), diags
+		}
+
+		// If we're not just passing through then we need to run gocty first
+		// to try to derive a suitable value from whatever we've been given.
+
+		retVal, err := gocty.ToCtyValue(retValRaw, wantTy)
+		if err != nil {
+			if !diags.HasErrors() { // If the result was errored anyway then we'll tolerate this conversion failure.
+				diags = diags.Append(sdkdiags.Diagnostic{
+					Severity: sdkdiags.Error,
+					Summary:  "Invalid result from provider",
+					Detail:   fmt.Sprintf("The provider produced an invalid result: %s.\n\nThis is a bug in the provider; please report it in the provider's issue tracker.", sdkdiags.FormatError(err)),
+				})
+			}
+			retVal = cty.NullVal(wantTy)
+		}
+		return retVal, diags
+	}, nil
+}
+
 func prepareDynamicCallArgs(f interface{}, args ...interface{}) ([]reflect.Value, sdkdiags.Diagnostics, error) {
 	fv := reflect.ValueOf(f)
 	if fv.Kind() != reflect.Func {
