@@ -163,8 +163,24 @@ func (s *tfplugin5Server) ValidateResourceTypeConfig(ctx context.Context, req *t
 	return resp, nil
 }
 
-func (s *tfplugin5Server) ValidateDataSourceConfig(context.Context, *tfplugin5.ValidateDataSourceConfig_Request) (*tfplugin5.ValidateDataSourceConfig_Response, error) {
-	return nil, grpc.Errorf(grpcCodes.Unimplemented, "not implemented")
+func (s *tfplugin5Server) ValidateDataSourceConfig(ctx context.Context, req *tfplugin5.ValidateDataSourceConfig_Request) (*tfplugin5.ValidateDataSourceConfig_Response, error) {
+	resp := &tfplugin5.ValidateDataSourceConfig_Response{}
+
+	var rt DataResourceType
+	if rt = s.requireDataResourceType(req.TypeName, &resp.Diagnostics); rt == nil {
+		return resp, nil
+	}
+
+	schema := rt.getSchema()
+	configVal, diags := decodeTFPlugin5DynamicValue(req.Config, schema)
+	if diags.HasErrors() {
+		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+		return resp, nil
+	}
+
+	diags = rt.validate(configVal)
+	resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+	return resp, nil
 }
 
 func (s *tfplugin5Server) UpgradeResourceState(context.Context, *tfplugin5.UpgradeResourceState_Request) (*tfplugin5.UpgradeResourceState_Response, error) {
@@ -304,8 +320,37 @@ func (s *tfplugin5Server) ImportResourceState(context.Context, *tfplugin5.Import
 	return nil, grpc.Errorf(grpcCodes.Unimplemented, "not implemented")
 }
 
-func (s *tfplugin5Server) ReadDataSource(context.Context, *tfplugin5.ReadDataSource_Request) (*tfplugin5.ReadDataSource_Response, error) {
-	return nil, grpc.Errorf(grpcCodes.Unimplemented, "not implemented")
+func (s *tfplugin5Server) ReadDataSource(ctx context.Context, req *tfplugin5.ReadDataSource_Request) (*tfplugin5.ReadDataSource_Response, error) {
+	resp := &tfplugin5.ReadDataSource_Response{}
+
+	var rt DataResourceType
+	if rt = s.requireDataResourceType(req.TypeName, &resp.Diagnostics); rt == nil {
+		return resp, nil
+	}
+	schema := rt.getSchema()
+
+	currentVal, diags := decodeTFPlugin5DynamicValue(req.Config, schema)
+	if diags.HasErrors() {
+		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+		return resp, nil
+	}
+
+	stoppableCtx := s.stoppableContext(ctx)
+	newVal, diags := s.p.ReadDataSource(stoppableCtx, rt, currentVal)
+
+	// Safety check
+	wantTy := schema.ImpliedCtyType()
+	for _, err := range newVal.Type().TestConformance(wantTy) {
+		diags = diags.Append(Diagnostic{
+			Severity: Error,
+			Summary:  "Invalid result from provider",
+			Detail:   fmt.Sprintf("Provider produced an invalid new object for %s: %s", req.TypeName, FormatError(err)),
+		})
+	}
+
+	resp.State = encodeTFPlugin5DynamicValue(newVal, schema)
+	resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+	return resp, nil
 }
 
 func (s *tfplugin5Server) Stop(context.Context, *tfplugin5.Stop_Request) (*tfplugin5.Stop_Response, error) {

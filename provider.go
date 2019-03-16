@@ -95,6 +95,10 @@ func (p *Provider) ReadResource(ctx context.Context, rt ManagedResourceType, cur
 	return rt.refresh(ctx, p.client, currentVal)
 }
 
+func (p *Provider) ReadDataSource(ctx context.Context, rt DataResourceType, configVal cty.Value) (cty.Value, Diagnostics) {
+	return rt.read(ctx, p.client, configVal)
+}
+
 func (p *Provider) PlanResourceChange(ctx context.Context, rt ManagedResourceType, priorVal, configVal, proposedVal cty.Value) (cty.Value, Diagnostics) {
 	return rt.planChange(ctx, p.client, priorVal, configVal, proposedVal)
 }

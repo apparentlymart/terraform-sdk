@@ -115,10 +115,17 @@ func NewDataResourceType(def *ResourceType) DataResourceType {
 		panic("NewDataResourceType requires def.SchemaVersion == 0")
 	}
 
+	readFn := def.ReadFn
+	if readFn == nil {
+		readFn = defaultReadFn
+	}
+
 	// TODO: Check thoroughly to make sure def is correctly populated for a data
 	// resource type, so we can panic early.
+
 	return dataResourceType{
 		configSchema: schema,
+		readFn:       readFn,
 	}
 }
 
@@ -265,6 +272,8 @@ func (rt managedResourceType) importState(ctx context.Context, client interface{
 
 type dataResourceType struct {
 	configSchema *SchemaBlockType
+
+	readFn interface{}
 }
 
 func (rt dataResourceType) getSchema() *SchemaBlockType {
@@ -276,7 +285,33 @@ func (rt dataResourceType) validate(obj cty.Value) Diagnostics {
 }
 
 func (rt dataResourceType) read(ctx context.Context, client interface{}, config cty.Value) (cty.Value, Diagnostics) {
-	return cty.NilVal, nil
+	var diags Diagnostics
+	wantTy := rt.configSchema.ImpliedCtyType()
+
+	fn, err := dynfunc.WrapFunctionWithReturnValueCty(rt.readFn, wantTy, ctx, client, config)
+	if err != nil {
+		diags = diags.Append(Diagnostic{
+			Severity: Error,
+			Summary:  "Invalid provider implementation",
+			Detail:   fmt.Sprintf("Invalid ReadFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err),
+		})
+		return rt.configSchema.Null(), diags
+	}
+
+	newVal, moreDiags := fn()
+	diags = diags.Append(moreDiags)
+
+	// We'll make life easier on the provider implementer by normalizing null
+	// and unknown values to the correct type automatically, so they can just
+	// return dynamically-typed nulls and unknowns.
+	switch {
+	case newVal.IsNull():
+		newVal = cty.NullVal(wantTy)
+	case !newVal.IsKnown():
+		newVal = cty.UnknownVal(wantTy)
+	}
+
+	return newVal, diags
 }
 
 func defaultReadFn(ctx context.Context, client interface{}, v cty.Value) (cty.Value, Diagnostics) {

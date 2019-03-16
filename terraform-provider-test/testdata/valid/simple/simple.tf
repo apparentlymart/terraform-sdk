@@ -1,9 +1,15 @@
 provider "test" {
 }
 
+data "test_echo" "test" {
+  given = "img-abc123"
+
+  dynamic = {}
+}
+
 resource "test_instance" "test" {
   type  = "z4.weedy"
-  image = "img-abc123"
+  image = data.test_echo.test.result
 
   access {
     policy = {

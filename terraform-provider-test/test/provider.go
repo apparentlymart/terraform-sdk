@@ -45,6 +45,9 @@ func Provider() *tfsdk.Provider {
 		ManagedResourceTypes: map[string]tfsdk.ManagedResourceType{
 			"test_instance": instanceManagedResourceType(),
 		},
+		DataResourceTypes: map[string]tfsdk.DataResourceType{
+			"test_echo": echoDataResourceType(),
+		},
 	}
 }
 
