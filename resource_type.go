@@ -79,6 +79,11 @@ func NewManagedResourceType(def *ResourceType) ManagedResourceType {
 		schema = &SchemaBlockType{}
 	}
 
+	readFn := def.ReadFn
+	if readFn == nil {
+		readFn = defaultReadFn
+	}
+
 	// TODO: Check thoroughly to make sure def is correctly populated for a
 	// managed resource type, so we can panic early.
 
@@ -86,7 +91,7 @@ func NewManagedResourceType(def *ResourceType) ManagedResourceType {
 		configSchema: schema,
 
 		createFn: def.CreateFn,
-		readFn:   def.ReadFn,
+		readFn:   readFn,
 		updateFn: def.UpdateFn,
 		deleteFn: def.DeleteFn,
 	}
@@ -136,8 +141,34 @@ func (rt managedResourceType) upgradeState(oldJSON []byte, oldVersion int) (cty.
 	return cty.NilVal, nil
 }
 
-func (rt managedResourceType) refresh(ctx context.Context, client interface{}, old cty.Value) (cty.Value, Diagnostics) {
-	return cty.NilVal, nil
+func (rt managedResourceType) refresh(ctx context.Context, client interface{}, current cty.Value) (cty.Value, Diagnostics) {
+	var diags Diagnostics
+	wantTy := rt.configSchema.ImpliedCtyType()
+
+	fn, err := dynfunc.WrapFunctionWithReturnValueCty(rt.readFn, wantTy, ctx, client, current)
+	if err != nil {
+		diags = diags.Append(Diagnostic{
+			Severity: Error,
+			Summary:  "Invalid provider implementation",
+			Detail:   fmt.Sprintf("Invalid ReadFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err),
+		})
+		return rt.configSchema.Null(), diags
+	}
+
+	newVal, moreDiags := fn()
+	diags = diags.Append(moreDiags)
+
+	// We'll make life easier on the provider implementer by normalizing null
+	// and unknown values to the correct type automatically, so they can just
+	// return dynamically-typed nulls and unknowns.
+	switch {
+	case newVal.IsNull():
+		newVal = cty.NullVal(wantTy)
+	case !newVal.IsKnown():
+		newVal = cty.UnknownVal(wantTy)
+	}
+
+	return newVal, diags
 }
 
 func (rt managedResourceType) planChange(ctx context.Context, client interface{}, prior, config, proposed cty.Value) (cty.Value, Diagnostics) {
@@ -188,17 +219,17 @@ func (rt managedResourceType) applyChange(ctx context.Context, client interface{
 	var errMsg string
 	switch {
 	case prior.IsNull():
-		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.createFn, wantTy, ctx, planned)
+		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.createFn, wantTy, ctx, client, planned)
 		if err != nil {
 			errMsg = fmt.Sprintf("Invalid CreateFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err)
 		}
 	case planned.IsNull():
-		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.deleteFn, wantTy, ctx, prior)
+		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.deleteFn, wantTy, ctx, client, prior)
 		if err != nil {
 			errMsg = fmt.Sprintf("Invalid DeleteFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err)
 		}
 	default:
-		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.updateFn, wantTy, ctx, prior, planned)
+		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.updateFn, wantTy, ctx, client, prior, planned)
 		if err != nil {
 			errMsg = fmt.Sprintf("Invalid UpdateFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err)
 		}
@@ -246,4 +277,8 @@ func (rt dataResourceType) validate(obj cty.Value) Diagnostics {
 
 func (rt dataResourceType) read(ctx context.Context, client interface{}, config cty.Value) (cty.Value, Diagnostics) {
 	return cty.NilVal, nil
+}
+
+func defaultReadFn(ctx context.Context, client interface{}, v cty.Value) (cty.Value, Diagnostics) {
+	return cty.UnknownAsNull(v), nil
 }

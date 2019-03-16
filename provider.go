@@ -91,6 +91,10 @@ func (p *Provider) DataResourceType(typeName string) DataResourceType {
 	return p.DataResourceTypes[typeName]
 }
 
+func (p *Provider) ReadResource(ctx context.Context, rt ManagedResourceType, currentVal cty.Value) (cty.Value, Diagnostics) {
+	return rt.refresh(ctx, p.client, currentVal)
+}
+
 func (p *Provider) PlanResourceChange(ctx context.Context, rt ManagedResourceType, priorVal, configVal, proposedVal cty.Value) (cty.Value, Diagnostics) {
 	return rt.planChange(ctx, p.client, priorVal, configVal, proposedVal)
 }

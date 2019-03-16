@@ -72,9 +72,23 @@ func instanceManagedResourceType() tfsdk.ManagedResourceType {
 			},
 		},
 
-		CreateFn: func(ctx context.Context, new *instanceMRT) (*instanceMRT, tfsdk.Diagnostics) {
+		ReadFn: func(cty context.Context, client *Client, current *instanceMRT) (*instanceMRT, tfsdk.Diagnostics) {
+			log.Printf("reading %#v", current)
+			return current, nil // No changes
+		},
+		CreateFn: func(ctx context.Context, client *Client, new *instanceMRT) (*instanceMRT, tfsdk.Diagnostics) {
 			log.Printf("creating %#v", new)
+			id := "placeholder"
+			new.ID = &id
 			return new, nil
+		},
+		UpdateFn: func(ctx context.Context, client *Client, prior, new *instanceMRT) (*instanceMRT, tfsdk.Diagnostics) {
+			log.Printf("updating %#v", new)
+			return new, nil
+		},
+		DeleteFn: func(ctx context.Context, client *Client, prior *instanceMRT) (*instanceMRT, tfsdk.Diagnostics) {
+			log.Printf("deleting %#v", prior)
+			return nil, nil
 		},
 	})
 }

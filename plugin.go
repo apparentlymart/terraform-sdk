@@ -186,8 +186,37 @@ func (s *tfplugin5Server) Configure(ctx context.Context, req *tfplugin5.Configur
 	return resp, nil
 }
 
-func (s *tfplugin5Server) ReadResource(context.Context, *tfplugin5.ReadResource_Request) (*tfplugin5.ReadResource_Response, error) {
-	return nil, grpc.Errorf(grpcCodes.Unimplemented, "not implemented")
+func (s *tfplugin5Server) ReadResource(ctx context.Context, req *tfplugin5.ReadResource_Request) (*tfplugin5.ReadResource_Response, error) {
+	resp := &tfplugin5.ReadResource_Response{}
+
+	var rt ManagedResourceType
+	if rt = s.requireManagedResourceType(req.TypeName, &resp.Diagnostics); rt == nil {
+		return resp, nil
+	}
+	schema, _ := rt.getSchema()
+
+	currentVal, diags := decodeTFPlugin5DynamicValue(req.CurrentState, schema)
+	if diags.HasErrors() {
+		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+		return resp, nil
+	}
+
+	stoppableCtx := s.stoppableContext(ctx)
+	newVal, diags := s.p.ReadResource(stoppableCtx, rt, currentVal)
+
+	// Safety check
+	wantTy := schema.ImpliedCtyType()
+	for _, err := range newVal.Type().TestConformance(wantTy) {
+		diags = diags.Append(Diagnostic{
+			Severity: Error,
+			Summary:  "Invalid result from provider",
+			Detail:   fmt.Sprintf("Provider produced an invalid new object for %s: %s", req.TypeName, FormatError(err)),
+		})
+	}
+
+	resp.NewState = encodeTFPlugin5DynamicValue(newVal, schema)
+	resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+	return resp, nil
 }
 
 func (s *tfplugin5Server) PlanResourceChange(ctx context.Context, req *tfplugin5.PlanResourceChange_Request) (*tfplugin5.PlanResourceChange_Response, error) {
@@ -258,7 +287,7 @@ func (s *tfplugin5Server) ApplyResourceChange(ctx context.Context, req *tfplugin
 
 	// Safety check
 	wantTy := schema.ImpliedCtyType()
-	for _, err := range plannedVal.Type().TestConformance(wantTy) {
+	for _, err := range newVal.Type().TestConformance(wantTy) {
 		diags = diags.Append(Diagnostic{
 			Severity: Error,
 			Summary:  "Invalid result from provider",
