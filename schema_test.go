@@ -75,7 +75,7 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			&tfsdk.SchemaAttribute{
 				Type:     cty.String,
 				Required: true,
-				ValidateFunc: func(v string) tfsdk.Diagnostics {
+				ValidateFn: func(v string) tfsdk.Diagnostics {
 					if v != "ok" {
 						return tfsdk.Diagnostics{
 							{
@@ -94,7 +94,7 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			&tfsdk.SchemaAttribute{
 				Type:     cty.String,
 				Required: true,
-				ValidateFunc: func(v string) tfsdk.Diagnostics {
+				ValidateFn: func(v string) tfsdk.Diagnostics {
 					if v != "ok" {
 						return tfsdk.Diagnostics{
 							{
@@ -117,20 +117,20 @@ func TestSchemaAttributeValidate(t *testing.T) {
 				Required: true,
 				// This is not something any provider should really do, but
 				// we want to make sure it produces a reasonable result.
-				ValidateFunc: func(v bool) tfsdk.Diagnostics {
+				ValidateFn: func(v bool) tfsdk.Diagnostics {
 					return nil
 				},
 			},
 			cty.StringVal("not a bool"),
 			[]string{
-				`[ERROR] Invalid argument value: Invalid value: bool value is required.`,
+				`[ERROR] Unsuitable argument value: This value cannot be used: bool value is required.`,
 			},
 		},
 		"custom validate function type with incorrect return type": {
 			&tfsdk.SchemaAttribute{
 				Type:     cty.String,
 				Optional: true,
-				ValidateFunc: func(string) string {
+				ValidateFn: func(string) string {
 					return ""
 				},
 			},
@@ -141,9 +141,9 @@ func TestSchemaAttributeValidate(t *testing.T) {
 		},
 		"custom validate function type with no return type": {
 			&tfsdk.SchemaAttribute{
-				Type:         cty.String,
-				Optional:     true,
-				ValidateFunc: func(string) {},
+				Type:       cty.String,
+				Optional:   true,
+				ValidateFn: func(string) {},
 			},
 			cty.StringVal("ok"),
 			[]string{
