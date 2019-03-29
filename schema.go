@@ -96,6 +96,8 @@ const (
 	SchemaNestingSet
 )
 
+//go:generate stringer -type=SchemaNestingMode -trimprefix Schema
+
 // Validate checks that the given object value is suitable for the recieving
 // block type, returning diagnostics if not.
 func (b *SchemaBlockType) Validate(val cty.Value) Diagnostics {
