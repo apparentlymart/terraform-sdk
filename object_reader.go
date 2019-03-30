@@ -46,10 +46,10 @@ type ObjectReader interface {
 	BlockFromMap(blockType string, key string) ObjectReader
 }
 
-// ObjectReader constructs a new ObjectReader for reading the given object
+// NewObjectReader constructs a new ObjectReader for reading the given object
 // value, which must be a non-null, known value whose type conforms to the
 // implied type of the recieving schema, or the results are undefined.
-func (s *SchemaBlockType) ObjectReader(obj cty.Value) ObjectReader {
+func (s *SchemaBlockType) NewObjectReader(obj cty.Value) ObjectReader {
 	if obj.IsNull() || !obj.IsKnown() {
 		panic("ObjectReader called with object that isn't known and non-null")
 	}

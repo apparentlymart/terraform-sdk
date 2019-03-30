@@ -41,20 +41,20 @@ type ObjectBuilder interface {
 	BlockBuilderFromMap(blockType string, key string) ObjectBuilder
 }
 
-// NewObjectBuilder creates and returns a new ObjectBuilder with the given
+// NewObjectBuilder creates and returns a new ObjectBuilder with the receiving
 // schema, whose initial value is a copy of the given object value.
 //
-// The given value must be an object type conforming to the given schema, or
+// The given value must be an object type conforming to the schema, or
 // this function may panic or have other undefined behavior. To start with
 // a value that has all attributes null and no nested blocks, pass cty.NilVal
 // as the initial value.
-func NewObjectBuilder(schema *SchemaBlockType, initial cty.Value) ObjectBuilder {
-	return newObjectBuilder(schema, initial)
+func (s *SchemaBlockType) NewObjectBuilder(initial cty.Value) ObjectBuilder {
+	return newObjectBuilder(s, initial)
 }
 
-// NewObjectBuilderFrom is a convenience wrapper for NewObjectBuilder that
-// uses the schema and value from the given ObjectReader to initialize the
-// new ObjectBuilder.
+// NewObjectBuilderFrom constructs an ObjectBuilder with the same schema as
+// the given ObjectReader and an initial object value equal to that of
+// the reader.
 func NewObjectBuilderFrom(r ObjectReader) ObjectBuilder {
 	return newObjectBuilder(r.Schema(), r.ObjectVal())
 }
