@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/apparentlymart/terraform-sdk/internal/dynfunc"
+	"github.com/apparentlymart/terraform-sdk/tfobj"
 	"github.com/apparentlymart/terraform-sdk/tfschema"
 	"github.com/zclconf/go-cty/cty"
 )
@@ -23,7 +24,7 @@ type ResourceType struct {
 	// type for the first time. It must be a function compatible with the
 	// following signature:
 	//
-	//     func (ctx context.Context, planned cty.Value) (new cty.Value, diags tfsdk.Diagnostics)
+	//     func (ctx context.Context, planned tfobj.ObjectReader) (new cty.Value, diags tfsdk.Diagnostics)
 	//
 	// If the create was not completely successful, you may still return a
 	// partially-created object alongside error diagnostics to retain the parts
@@ -34,7 +35,7 @@ type ResourceType struct {
 	// instance of your resource type. It must be a function compatible with the
 	// following signature:
 	//
-	//     func (ctx context.Context, prior cty.Value) (new cty.Value, diags tfsdk.Diagnostics)
+	//     func (ctx context.Context, planned tfobj.ObjectReader) (new cty.Value, diags tfsdk.Diagnostics)
 	//
 	// If the given object appears to have been deleted upstream, return a null
 	// value to indicate that. The object will then be removed from the Terraform
@@ -45,7 +46,7 @@ type ResourceType struct {
 	// instance of your resource type. It must be a function compatible with the
 	// following signature:
 	//
-	//     func (ctx context.Context, prior cty.Value, planned cty.Value) (new cty.Value, diags tfsdk.Diagnostics)
+	//     func (ctx context.Context, prior tfobj.ObjectReader, planned tfobj.PlanReader) (new cty.Value, diags tfsdk.Diagnostics)
 	//
 	// If the update is not completely successful, you may still return a
 	// partially-updated object alongside error diagnostics to retain the
@@ -57,7 +58,7 @@ type ResourceType struct {
 	// DeleteFn is a function called to delete an instance of your resource type.
 	// It must be a function compatible with the following signature:
 	//
-	//     func (ctx context.Context, prior cty.Value) tfsdk.Diagnostics
+	//     func (ctx context.Context, prior tfobj.ObjectReader) tfsdk.Diagnostics
 	//
 	// If error diagnostics are returned, the SDK will assume that the delete
 	// failed and that the object still exists. If it actually was deleted
@@ -153,7 +154,8 @@ func (rt managedResourceType) refresh(ctx context.Context, client interface{}, c
 	var diags Diagnostics
 	wantTy := rt.configSchema.ImpliedCtyType()
 
-	fn, err := dynfunc.WrapFunctionWithReturnValueCty(rt.readFn, wantTy, ctx, client, current)
+	currentReader := tfobj.NewObjectReader(rt.configSchema, current)
+	fn, err := dynfunc.WrapFunctionWithReturnValueCty(rt.readFn, wantTy, ctx, client, currentReader)
 	if err != nil {
 		diags = diags.Append(Diagnostic{
 			Severity: Error,
@@ -227,17 +229,21 @@ func (rt managedResourceType) applyChange(ctx context.Context, client interface{
 	var errMsg string
 	switch {
 	case prior.IsNull():
-		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.createFn, wantTy, ctx, client, planned)
+		plannedReader := tfobj.NewObjectReader(rt.configSchema, planned)
+		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.createFn, wantTy, ctx, client, plannedReader)
 		if err != nil {
 			errMsg = fmt.Sprintf("Invalid CreateFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err)
 		}
 	case planned.IsNull():
-		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.deleteFn, wantTy, ctx, client, prior)
+		priorReader := tfobj.NewObjectReader(rt.configSchema, prior)
+		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.deleteFn, wantTy, ctx, client, priorReader)
 		if err != nil {
 			errMsg = fmt.Sprintf("Invalid DeleteFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err)
 		}
 	default:
-		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.updateFn, wantTy, ctx, client, prior, planned)
+		priorReader := tfobj.NewObjectReader(rt.configSchema, prior)
+		plannedReader := tfobj.NewPlanReader(rt.configSchema, prior, planned)
+		fn, err = dynfunc.WrapFunctionWithReturnValueCty(rt.updateFn, wantTy, ctx, client, priorReader, plannedReader)
 		if err != nil {
 			errMsg = fmt.Sprintf("Invalid UpdateFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err)
 		}
@@ -289,7 +295,8 @@ func (rt dataResourceType) read(ctx context.Context, client interface{}, config 
 	var diags Diagnostics
 	wantTy := rt.configSchema.ImpliedCtyType()
 
-	fn, err := dynfunc.WrapFunctionWithReturnValueCty(rt.readFn, wantTy, ctx, client, config)
+	configReader := tfobj.NewObjectReader(rt.configSchema, config)
+	fn, err := dynfunc.WrapFunctionWithReturnValueCty(rt.readFn, wantTy, ctx, client, configReader)
 	if err != nil {
 		diags = diags.Append(Diagnostic{
 			Severity: Error,

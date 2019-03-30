@@ -39,14 +39,6 @@ type PlanReader interface {
 	// operation, because there is no prior object in that case.
 	PriorReader() ObjectReader
 
-	// ConfigReader returns an ObjectReader for the object representing the
-	// configuration as written by the user. The config object has values
-	// only for attributes that were set in the configuration; all other
-	// attributes have null values, allowing the provider to determine whether
-	// it is appropriate to substitute a default value for an attribute that
-	// is marked as Computed.
-	ConfigReader() ObjectReader
-
 	// AttrChange returns the value of the given attribute from the prior
 	// object and the planned new object respectively. When planning for
 	// a "create" operation, the prior object is always null.
@@ -82,6 +74,20 @@ type PlanReader interface {
 // that a bug in the provider and abort the apply operation.
 type PlanBuilder interface {
 	PlanReader
+
+	// ConfigReader returns an ObjectReader for the object representing the
+	// configuration as written by the user. The config object has values
+	// only for attributes that were set in the configuration; all other
+	// attributes have null values, allowing the provider to determine whether
+	// it is appropriate to substitute a default value for an attribute that
+	// is marked as Computed.
+	//
+	// Although this is a read-only method, it is on PlanBuilder rather than
+	// PlanReader because the configuration is consulted only during plan
+	// construction. The provider should perform any analysis of the
+	// configuration it needs during planning and record its decisions in
+	// the planned new value for use during the apply step.
+	ConfigReader() ObjectReader
 
 	// CanProvideAttrDefault returns true if and only if the attribute of the
 	// given name is marked as Computed in the schema and that attribute has
@@ -153,21 +159,40 @@ type planBuilder struct {
 	planned ObjectBuilder
 }
 
+// NewPlanReader constructs a PlanReader for an already-created plan, whose
+// planned new object is described by "planned".
+func NewPlanReader(schema *tfschema.BlockType, prior, planned cty.Value) PlanReader {
+	// We just use a partially-configured PlanBuilder for this, because
+	// PlanBuilder is a superset of PlanReader anyway. Technically this means
+	// that a caller could type-assert this result to PlanBuilder and then
+	// get some weird behavior, but that would be a very strange thing to do.
+	// (If you're a provider developer reading this: please don't do it; we
+	// might break this implementation detail in a future release.)
+	return newPlanBuilder(schema, prior, cty.NilVal, planned)
+}
+
+// NewPlanBuilder constructs a PlanBuilder with the given prior, config, and
+// proposed objects, ready to be used to customize the proposed object and
+// ultimately create a planned new object to return.
+func NewPlanBuilder(schema *tfschema.BlockType, prior, config, planned cty.Value) PlanBuilder {
+	return newPlanBuilder(schema, prior, config, planned)
+}
+
 func newPlanBuilder(schema *tfschema.BlockType, prior, config, proposed cty.Value) PlanBuilder {
 	var priorReader, configReader ObjectReader
-	if !prior.IsNull() {
+	if prior != cty.NilVal && !prior.IsNull() {
 		priorReader = NewObjectReader(schema, prior)
 	}
-	if !config.IsNull() {
+	if config != cty.NilVal && !config.IsNull() {
 		configReader = NewObjectReader(schema, prior)
 	}
 	var plannedBuilder ObjectBuilder
-	if !proposed.IsNull() {
+	if proposed != cty.NilVal && !proposed.IsNull() {
 		plannedBuilder = NewObjectBuilder(schema, proposed)
 	}
 	action := Update
 	switch {
-	case config.IsNull() || proposed.IsNull():
+	case proposed.IsNull():
 		action = Delete
 	case prior.IsNull():
 		action = Create
@@ -197,6 +222,9 @@ func (b *planBuilder) PriorReader() ObjectReader {
 }
 
 func (b *planBuilder) ConfigReader() ObjectReader {
+	if b.config == nil {
+		panic("configuration is available only during the plan phase")
+	}
 	return b.config
 }
 
@@ -512,7 +540,7 @@ func (b *planBuilder) requireWritable() {
 func (b *planBuilder) subBuilder(schema *tfschema.NestedBlockType, prior, config ObjectReader, planned ObjectBuilder) PlanBuilder {
 	action := Update
 	switch {
-	case config == nil || planned == nil:
+	case planned == nil:
 		action = Delete
 	case prior == nil:
 		action = Create

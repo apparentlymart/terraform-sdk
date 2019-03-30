@@ -5,12 +5,17 @@ import (
 	"reflect"
 
 	"github.com/apparentlymart/terraform-sdk/internal/sdkdiags"
+	"github.com/apparentlymart/terraform-sdk/tfobj"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/gocty"
 )
 
 var diagnosticsType = reflect.TypeOf(sdkdiags.Diagnostics(nil))
 var ctyValueType = reflect.TypeOf(cty.Value{})
+var objectReaderType = reflect.TypeOf(tfobj.ObjectReader(nil))
+var objectBuilderType = reflect.TypeOf(tfobj.ObjectBuilder(nil))
+var planReaderType = reflect.TypeOf(tfobj.PlanReader(nil))
+var planBuilderType = reflect.TypeOf(tfobj.PlanBuilder(nil))
 
 // WrapSimpleFunction dynamically binds the given arguments to the given
 // function, or returns a developer-oriented error describing why it cannot.
@@ -195,25 +200,34 @@ func prepareDynamicCallArgs(f interface{}, args ...interface{}) ([]reflect.Value
 		wantType := ft.In(i)
 		switch arg := rawArg.(type) {
 		case cty.Value:
-			// As a special case, we handle cty.Value arguments through gocty.
-			targetVal := reflect.New(wantType)
-			err := gocty.FromCtyValue(arg, targetVal.Interface())
-			if err != nil {
-				// While most of the errors in here are written as if the
-				// f interface is wrong, for this particular case we invert
-				// that to consider the f argument as a way to specify
-				// constraints on the user-provided value. However, we don't
-				// have much context here for what the wrapped function is for,
-				// so our error message is necessarily generic. Providers should
-				// generally not rely on this error form and should instead
-				// ensure that all user-supplyable values can be accepted.
-				forceDiags = forceDiags.Append(sdkdiags.Diagnostic{
-					Severity: sdkdiags.Error,
-					Summary:  "Unsuitable argument value",
-					Detail:   fmt.Sprintf("This value cannot be used: %s.", sdkdiags.FormatError(err)),
-				})
+			var moreDiags sdkdiags.Diagnostics
+			convArgs[i], moreDiags = prepareCtyValueArg(arg, wantType)
+			forceDiags = forceDiags.Append(moreDiags)
+		case tfobj.PlanBuilder:
+			// Although PlanBuilder is also an ObjectBuilder, we circumvent
+			// the usual automatic cty.Value unpacking here because plans
+			// invariably contain unknown values, and so gocty conversion
+			// is very likely to fail anyway. If the provider implementer
+			// really wants to work with the raw cty.Value (and is willing to
+			// deal with all of the unknown value wrangling that implies)
+			// they can call ObjectVal on the PlanBuilder they recieve.
+			argVal := reflect.ValueOf(rawArg)
+			if !argVal.Type().AssignableTo(wantType) {
+				return nil, nil, fmt.Errorf("argument %d must accept %T", i, rawArg)
 			}
-			convArgs[i] = targetVal.Elem() // New created a pointer, but we want the referent
+			convArgs[i] = argVal
+		case tfobj.ObjectReader:
+			argVal := reflect.ValueOf(rawArg)
+			if argVal.Type().AssignableTo(wantType) {
+				// Easy case! We'll just pass it on verbatim
+				convArgs[i] = argVal
+			} else {
+				// Otherwise we'll unpack the cty.Value inside the reader and
+				// use gocty with it, just as we'd do for a plain cty.Value.
+				var moreDiags sdkdiags.Diagnostics
+				convArgs[i], moreDiags = prepareCtyValueArg(arg.ObjectVal(), wantType)
+				forceDiags = forceDiags.Append(moreDiags)
+			}
 		default:
 			// All other arguments must be directly assignable.
 			argVal := reflect.ValueOf(rawArg)
@@ -225,4 +239,29 @@ func prepareDynamicCallArgs(f interface{}, args ...interface{}) ([]reflect.Value
 	}
 
 	return convArgs, forceDiags, nil
+}
+
+func prepareCtyValueArg(arg cty.Value, wantType reflect.Type) (reflect.Value, sdkdiags.Diagnostics) {
+	var diags sdkdiags.Diagnostics
+
+	// As a special case, we handle cty.Value arguments through gocty.
+	targetVal := reflect.New(wantType)
+	err := gocty.FromCtyValue(arg, targetVal.Interface())
+	if err != nil {
+		// While most of the errors in here are written as if the
+		// f interface is wrong, for this particular case we invert
+		// that to consider the f argument as a way to specify
+		// constraints on the user-provided value. However, we don't
+		// have much context here for what the wrapped function is for,
+		// so our error message is necessarily generic. Providers should
+		// generally not rely on this error form and should instead
+		// ensure that all user-supplyable values can be accepted.
+		diags = diags.Append(sdkdiags.Diagnostic{
+			Severity: sdkdiags.Error,
+			Summary:  "Unsuitable argument value",
+			Detail:   fmt.Sprintf("This value cannot be used: %s.", sdkdiags.FormatError(err)),
+		})
+	}
+
+	return targetVal.Elem(), diags // New created a pointer, but we want the referent
 }
