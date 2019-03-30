@@ -24,7 +24,7 @@ type ResourceType struct {
 	// type for the first time. It must be a function compatible with the
 	// following signature:
 	//
-	//     func (ctx context.Context, planned tfobj.ObjectReader) (new cty.Value, diags tfsdk.Diagnostics)
+	//     func (ctx context.Context, client interface{}, planned tfobj.ObjectReader) (new cty.Value, diags tfsdk.Diagnostics)
 	//
 	// If the create was not completely successful, you may still return a
 	// partially-created object alongside error diagnostics to retain the parts
@@ -35,7 +35,7 @@ type ResourceType struct {
 	// instance of your resource type. It must be a function compatible with the
 	// following signature:
 	//
-	//     func (ctx context.Context, planned tfobj.ObjectReader) (new cty.Value, diags tfsdk.Diagnostics)
+	//     func (ctx context.Context, client interface{}, planned tfobj.ObjectReader) (new cty.Value, diags tfsdk.Diagnostics)
 	//
 	// If the given object appears to have been deleted upstream, return a null
 	// value to indicate that. The object will then be removed from the Terraform
@@ -46,7 +46,7 @@ type ResourceType struct {
 	// instance of your resource type. It must be a function compatible with the
 	// following signature:
 	//
-	//     func (ctx context.Context, prior tfobj.ObjectReader, planned tfobj.PlanReader) (new cty.Value, diags tfsdk.Diagnostics)
+	//     func (ctx context.Context, client interface{}, prior tfobj.ObjectReader, planned tfobj.PlanReader) (new cty.Value, diags tfsdk.Diagnostics)
 	//
 	// If the update is not completely successful, you may still return a
 	// partially-updated object alongside error diagnostics to retain the
@@ -58,12 +58,23 @@ type ResourceType struct {
 	// DeleteFn is a function called to delete an instance of your resource type.
 	// It must be a function compatible with the following signature:
 	//
-	//     func (ctx context.Context, prior tfobj.ObjectReader) tfsdk.Diagnostics
+	//     func (ctx context.Context, client interface{}, prior tfobj.ObjectReader) tfsdk.Diagnostics
 	//
 	// If error diagnostics are returned, the SDK will assume that the delete
 	// failed and that the object still exists. If it actually was deleted
 	// before the failure, this should be detected on the next Read call.
 	DeleteFn interface{}
+
+	// PlanFn can be set for managed resource types in order to make adjustments
+	// to a planned change for an instance. It must be a function compatible
+	// with the following signature:
+	//
+	//     func (ctx context.Context, client interface{}, plan tfobj.PlanBuilder) (planned cty.Value, diags tfsdk.Diagnostics)
+	//
+	// If possible, the provider should also perform validation of the planned
+	// change and return errors or warnings early, rather than waiting until
+	// the apply step.
+	PlanFn interface{}
 }
 
 // NewManagedResourceType prepares a ManagedResourceType implementation using
@@ -96,6 +107,7 @@ func NewManagedResourceType(def *ResourceType) ManagedResourceType {
 		readFn:   readFn,
 		updateFn: def.UpdateFn,
 		deleteFn: def.DeleteFn,
+		planFn:   def.PlanFn,
 	}
 }
 
@@ -136,6 +148,7 @@ type managedResourceType struct {
 	schemaVersion int64
 
 	createFn, readFn, updateFn, deleteFn interface{}
+	planFn                               interface{}
 }
 
 func (rt managedResourceType) getSchema() (schema *tfschema.BlockType, version int64) {
@@ -183,16 +196,43 @@ func (rt managedResourceType) refresh(ctx context.Context, client interface{}, c
 
 func (rt managedResourceType) planChange(ctx context.Context, client interface{}, prior, config, proposed cty.Value) (cty.Value, Diagnostics) {
 	var diags Diagnostics
+	wantTy := rt.configSchema.ImpliedCtyType()
 
 	// Terraform Core has already done a lot of the work in merging prior with
 	// config to produce "proposed". Our main job here is inserting any additional
 	// default values called for in the provider schema.
 	planned := rt.configSchema.ApplyDefaults(proposed)
 
-	// TODO: We should also give the provider code an opportunity to make
-	// further changes to the "Computed" parts of the planned value so it
-	// can use its own logic, or possibly remote API calls, to produce the
-	// most accurate plan.
+	if !planned.RawEquals(prior) {
+		// If there are already changes planned then the provider code gets
+		// an opportunity to refine the changeset in case there are any
+		// side-effects of the configuration change that could affect any
+		// pre-existing computed attribute values.
+		planBuilder := tfobj.NewPlanBuilder(rt.configSchema, prior, config, planned)
+		fn, err := dynfunc.WrapFunctionWithReturnValueCty(rt.planFn, wantTy, ctx, client, planBuilder)
+		if err != nil {
+			diags = diags.Append(Diagnostic{
+				Severity: Error,
+				Summary:  "Invalid provider implementation",
+				Detail:   fmt.Sprintf("Invalid PlanFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err),
+			})
+			return rt.configSchema.Null(), diags
+		}
+
+		var moreDiags Diagnostics
+		planned, moreDiags = fn()
+		diags = diags.Append(moreDiags)
+
+		// We'll make life easier on the provider implementer by normalizing null
+		// and unknown values to the correct type automatically, so they can just
+		// return dynamically-typed nulls and unknowns.
+		switch {
+		case planned.IsNull():
+			planned = cty.NullVal(wantTy)
+		case !planned.IsKnown():
+			planned = cty.UnknownVal(wantTy)
+		}
+	}
 
 	return planned, diags
 }

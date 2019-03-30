@@ -111,6 +111,7 @@ type objectBuilder struct {
 
 func newObjectBuilder(schema *tfschema.BlockType, initial cty.Value) *objectBuilder {
 	ret := &objectBuilder{
+		schema:       schema,
 		attrs:        make(map[string]cty.Value),
 		singleBlocks: make(map[string]*objectBuilder),
 		listBlocks:   make(map[string][]*objectBuilder),

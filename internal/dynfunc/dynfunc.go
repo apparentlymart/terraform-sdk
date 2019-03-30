@@ -203,19 +203,6 @@ func prepareDynamicCallArgs(f interface{}, args ...interface{}) ([]reflect.Value
 			var moreDiags sdkdiags.Diagnostics
 			convArgs[i], moreDiags = prepareCtyValueArg(arg, wantType)
 			forceDiags = forceDiags.Append(moreDiags)
-		case tfobj.PlanBuilder:
-			// Although PlanBuilder is also an ObjectBuilder, we circumvent
-			// the usual automatic cty.Value unpacking here because plans
-			// invariably contain unknown values, and so gocty conversion
-			// is very likely to fail anyway. If the provider implementer
-			// really wants to work with the raw cty.Value (and is willing to
-			// deal with all of the unknown value wrangling that implies)
-			// they can call ObjectVal on the PlanBuilder they recieve.
-			argVal := reflect.ValueOf(rawArg)
-			if !argVal.Type().AssignableTo(wantType) {
-				return nil, nil, fmt.Errorf("argument %d must accept %T", i, rawArg)
-			}
-			convArgs[i] = argVal
 		case tfobj.ObjectReader:
 			argVal := reflect.ValueOf(rawArg)
 			if argVal.Type().AssignableTo(wantType) {

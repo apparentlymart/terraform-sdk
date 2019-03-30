@@ -154,6 +154,7 @@ const (
 
 type planBuilder struct {
 	action  Action
+	schema  *tfschema.BlockType
 	prior   ObjectReader
 	config  ObjectReader
 	planned ObjectBuilder
@@ -184,7 +185,7 @@ func newPlanBuilder(schema *tfschema.BlockType, prior, config, proposed cty.Valu
 		priorReader = NewObjectReader(schema, prior)
 	}
 	if config != cty.NilVal && !config.IsNull() {
-		configReader = NewObjectReader(schema, prior)
+		configReader = NewObjectReader(schema, config)
 	}
 	var plannedBuilder ObjectBuilder
 	if proposed != cty.NilVal && !proposed.IsNull() {
@@ -198,6 +199,7 @@ func newPlanBuilder(schema *tfschema.BlockType, prior, config, proposed cty.Valu
 		action = Create
 	}
 	return &planBuilder{
+		schema:  schema,
 		action:  action,
 		prior:   priorReader,
 		config:  configReader,
@@ -210,7 +212,7 @@ func (b *planBuilder) Action() Action {
 }
 
 func (b *planBuilder) Schema() *tfschema.BlockType {
-	return b.planned.Schema()
+	return b.schema
 }
 
 func (b *planBuilder) ObjectVal() cty.Value {
