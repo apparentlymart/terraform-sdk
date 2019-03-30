@@ -17,7 +17,7 @@ type echoDRT struct {
 }
 
 func echoDataResourceType() tfsdk.DataResourceType {
-	return tfsdk.NewDataResourceType(&tfsdk.ResourceType{
+	return tfsdk.NewDataResourceType(&tfsdk.ResourceTypeDef{
 		ConfigSchema: &tfschema.BlockType{
 			Attributes: map[string]*tfschema.Attribute{
 				"given":  {Type: cty.String, Required: true},

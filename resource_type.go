@@ -10,13 +10,17 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
-// ResourceType is the type that provider packages should instantiate to
-// implement a specific resource type.
+// ResourceTypeDef is the type that provider packages should instantiate to
+// describe the implementation of a specific resource type.
 //
-// Pointers to instances of this type can be passed to the functions
-// NewManagedResourceType and NewDataResourceType to provide managed and
-// data resource type implementations respectively.
-type ResourceType struct {
+// "Def" in the type name is short for "Definition"; a ResourceTypeDef is not
+// actually itself a resource type, but pointers to instances of this type can
+// be passed to the functions NewManagedResourceType and NewDataResourceType to
+// provide managed and data resource type implementations respectively. Each
+// specific resource type kind has its own constraints on what can and must
+// be set in a ResourceTypeDef for that kind; see the resource type constructor
+// functions' documentation for more information.
+type ResourceTypeDef struct {
 	ConfigSchema  *tfschema.BlockType
 	SchemaVersion int64 // Only used for managed resource types; leave as zero otherwise
 
@@ -82,7 +86,7 @@ type ResourceType struct {
 //
 // This function is intended to be called during startup with a valid
 // ResourceType, so it will panic if the given ResourceType is not valid.
-func NewManagedResourceType(def *ResourceType) ManagedResourceType {
+func NewManagedResourceType(def *ResourceTypeDef) ManagedResourceType {
 	if def == nil {
 		panic("NewManagedResourceType called with nil definition")
 	}
@@ -116,7 +120,7 @@ func NewManagedResourceType(def *ResourceType) ManagedResourceType {
 //
 // This function is intended to be called during startup with a valid
 // ResourceType, so it will panic if the given ResourceType is not valid.
-func NewDataResourceType(def *ResourceType) DataResourceType {
+func NewDataResourceType(def *ResourceTypeDef) DataResourceType {
 	if def == nil {
 		panic("NewDataResourceType called with nil definition")
 	}

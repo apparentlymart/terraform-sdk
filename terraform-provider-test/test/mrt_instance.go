@@ -30,7 +30,7 @@ type instanceMRTAccess struct {
 }
 
 func instanceManagedResourceType() tfsdk.ManagedResourceType {
-	return tfsdk.NewManagedResourceType(&tfsdk.ResourceType{
+	return tfsdk.NewManagedResourceType(&tfsdk.ResourceTypeDef{
 		ConfigSchema: &tfschema.BlockType{
 			Attributes: map[string]*tfschema.Attribute{
 				"id":      {Type: cty.String, Computed: true},
