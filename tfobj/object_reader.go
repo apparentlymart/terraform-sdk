@@ -1,8 +1,9 @@
-package tfsdk
+package tfobj
 
 import (
 	"fmt"
 
+	"github.com/apparentlymart/terraform-sdk/tfschema"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -11,7 +12,7 @@ import (
 type ObjectReader interface {
 	// Schema returns the schema that the object conforms to. Do not modify
 	// any part of the returned schema.
-	Schema() *SchemaBlockType
+	Schema() *tfschema.BlockType
 
 	// ObjectVal returns the whole object that the ObjectReader is providing
 	// access to. The result has a type that conforms to the reader's schema.
@@ -30,7 +31,7 @@ type ObjectReader interface {
 	//
 	// BlockSingle, BlockList, and BlockMap allow reading all of the blocks of
 	// a particular type, with each one being appropriate for a different
-	// SchemaNestingMode. These methods will panic if the method called isn't
+	// tfschema.NestingMode. These methods will panic if the method called isn't
 	// compatible with the nesting mode. (BlockList can be used with NestingSet).
 	//
 	// BlockFromList and BlockFromMap similarly allow extracting a single nested
@@ -49,7 +50,7 @@ type ObjectReader interface {
 // NewObjectReader constructs a new ObjectReader for reading the given object
 // value, which must be a non-null, known value whose type conforms to the
 // implied type of the recieving schema, or the results are undefined.
-func (s *SchemaBlockType) NewObjectReader(obj cty.Value) ObjectReader {
+func NewObjectReader(schema *tfschema.BlockType, obj cty.Value) ObjectReader {
 	if obj.IsNull() || !obj.IsKnown() {
 		panic("ObjectReader called with object that isn't known and non-null")
 	}
@@ -57,19 +58,19 @@ func (s *SchemaBlockType) NewObjectReader(obj cty.Value) ObjectReader {
 		panic("ObjectReader called with non-object value")
 	}
 	return &objectReaderVal{
-		schema: s,
+		schema: schema,
 		v:      obj,
 	}
 }
 
 type objectReaderVal struct {
-	schema *SchemaBlockType
+	schema *tfschema.BlockType
 	v      cty.Value
 }
 
 var _ ObjectReader = (*objectReaderVal)(nil)
 
-func (r *objectReaderVal) Schema() *SchemaBlockType {
+func (r *objectReaderVal) Schema() *tfschema.BlockType {
 	return r.schema
 }
 
@@ -88,7 +89,7 @@ func (r *objectReaderVal) Attr(name string) cty.Value {
 func (r *objectReaderVal) BlockCount(blockType string) int {
 	blockS, obj := r.blockVal(blockType)
 	switch blockS.Nesting {
-	case SchemaNestingSingle:
+	case tfschema.NestingSingle:
 		if obj.IsNull() {
 			return 0
 		}
@@ -105,7 +106,7 @@ func (r *objectReaderVal) BlockCount(blockType string) int {
 
 func (r *objectReaderVal) BlockSingle(blockType string) ObjectReader {
 	blockS, obj := r.blockVal(blockType)
-	if blockS.Nesting != SchemaNestingSingle {
+	if blockS.Nesting != tfschema.NestingSingle {
 		panic(fmt.Sprintf("attempt to read block type %q (%s) with BlockSingle method", blockType, blockS.Nesting))
 	}
 	return &objectReaderVal{
@@ -116,7 +117,7 @@ func (r *objectReaderVal) BlockSingle(blockType string) ObjectReader {
 
 func (r *objectReaderVal) BlockList(blockType string) []ObjectReader {
 	blockS, list := r.blockVal(blockType)
-	if blockS.Nesting != SchemaNestingList && blockS.Nesting != SchemaNestingSet {
+	if blockS.Nesting != tfschema.NestingList && blockS.Nesting != tfschema.NestingSet {
 		panic(fmt.Sprintf("attempt to read block type %q (%s) with BlockList method", blockType, blockS.Nesting))
 	}
 	if list.IsNull() || !list.IsKnown() {
@@ -138,7 +139,7 @@ func (r *objectReaderVal) BlockList(blockType string) []ObjectReader {
 
 func (r *objectReaderVal) BlockMap(blockType string) map[string]ObjectReader {
 	blockS, m := r.blockVal(blockType)
-	if blockS.Nesting != SchemaNestingMap {
+	if blockS.Nesting != tfschema.NestingMap {
 		panic(fmt.Sprintf("attempt to read block type %q (%s) with BlockMap method", blockType, blockS.Nesting))
 	}
 	if m.IsNull() || !m.IsKnown() {
@@ -160,7 +161,7 @@ func (r *objectReaderVal) BlockMap(blockType string) map[string]ObjectReader {
 
 func (r *objectReaderVal) BlockFromList(blockType string, idx int) ObjectReader {
 	blockS, list := r.blockVal(blockType)
-	if blockS.Nesting != SchemaNestingList {
+	if blockS.Nesting != tfschema.NestingList {
 		panic(fmt.Sprintf("attempt to read block type %q (%s) with BlockFromList method", blockType, blockS.Nesting))
 	}
 	v := list.Index(cty.NumberIntVal(int64(idx)))
@@ -172,7 +173,7 @@ func (r *objectReaderVal) BlockFromList(blockType string, idx int) ObjectReader 
 
 func (r *objectReaderVal) BlockFromMap(blockType string, key string) ObjectReader {
 	blockS, list := r.blockVal(blockType)
-	if blockS.Nesting != SchemaNestingMap {
+	if blockS.Nesting != tfschema.NestingMap {
 		panic(fmt.Sprintf("attempt to read block type %q (%s) with BlockFromMap method", blockType, blockS.Nesting))
 	}
 	v := list.Index(cty.StringVal(key))
@@ -182,7 +183,7 @@ func (r *objectReaderVal) BlockFromMap(blockType string, key string) ObjectReade
 	}
 }
 
-func (r *objectReaderVal) blockVal(blockType string) (*SchemaNestedBlockType, cty.Value) {
+func (r *objectReaderVal) blockVal(blockType string) (*tfschema.NestedBlockType, cty.Value) {
 	blockS, exists := r.schema.NestedBlockTypes[blockType]
 	if !exists {
 		panic(fmt.Sprintf("attempt to read non-block-type %q with block method", blockType))

@@ -1,8 +1,10 @@
-package tfsdk
+package tfobj
 
 import (
 	"fmt"
 
+	"github.com/apparentlymart/terraform-sdk/internal/sdkdiags"
+	"github.com/apparentlymart/terraform-sdk/tfschema"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/convert"
 )
@@ -48,8 +50,8 @@ type ObjectBuilder interface {
 // this function may panic or have other undefined behavior. To start with
 // a value that has all attributes null and no nested blocks, pass cty.NilVal
 // as the initial value.
-func (s *SchemaBlockType) NewObjectBuilder(initial cty.Value) ObjectBuilder {
-	return newObjectBuilder(s, initial)
+func NewObjectBuilder(schema *tfschema.BlockType, initial cty.Value) ObjectBuilder {
+	return newObjectBuilder(schema, initial)
 }
 
 // NewObjectBuilderFrom constructs an ObjectBuilder with the same schema as
@@ -92,20 +94,20 @@ type ObjectBuilderFull interface {
 
 // NewObjectBuilderFull is like NewObjectBuilder except that it constructs an
 // ObjectBuilderFull instead of just an ObjectBuilder.
-func (s *SchemaBlockType) NewObjectBuilderFull(initial cty.Value) ObjectBuilderFull {
-	ob := newObjectBuilder(s, initial)
+func NewObjectBuilderFull(schema *tfschema.BlockType, initial cty.Value) ObjectBuilderFull {
+	ob := newObjectBuilder(schema, initial)
 	return objectBuilderFull{ob}
 }
 
 type objectBuilder struct {
-	schema       *SchemaBlockType
+	schema       *tfschema.BlockType
 	attrs        map[string]cty.Value
 	singleBlocks map[string]*objectBuilder
 	listBlocks   map[string][]*objectBuilder
 	mapBlocks    map[string]map[string]*objectBuilder
 }
 
-func newObjectBuilder(schema *SchemaBlockType, initial cty.Value) *objectBuilder {
+func newObjectBuilder(schema *tfschema.BlockType, initial cty.Value) *objectBuilder {
 	ret := &objectBuilder{
 		attrs:        make(map[string]cty.Value),
 		singleBlocks: make(map[string]*objectBuilder),
@@ -123,7 +125,7 @@ func newObjectBuilder(schema *SchemaBlockType, initial cty.Value) *objectBuilder
 
 	for name, blockS := range schema.NestedBlockTypes {
 		switch blockS.Nesting {
-		case SchemaNestingSingle:
+		case tfschema.NestingSingle:
 			if initial == cty.NilVal {
 				ret.singleBlocks[name] = nil
 				continue
@@ -134,7 +136,7 @@ func newObjectBuilder(schema *SchemaBlockType, initial cty.Value) *objectBuilder
 				continue
 			}
 			ret.singleBlocks[name] = newObjectBuilder(&blockS.Content, nv)
-		case SchemaNestingList, SchemaNestingSet:
+		case tfschema.NestingList, tfschema.NestingSet:
 			if initial == cty.NilVal {
 				ret.listBlocks[name] = make([]*objectBuilder, 0)
 				continue
@@ -150,7 +152,7 @@ func newObjectBuilder(schema *SchemaBlockType, initial cty.Value) *objectBuilder
 					)
 				}
 			}
-		case SchemaNestingMap:
+		case tfschema.NestingMap:
 			if initial == cty.NilVal {
 				ret.mapBlocks[name] = make(map[string]*objectBuilder)
 				continue
@@ -171,7 +173,7 @@ func newObjectBuilder(schema *SchemaBlockType, initial cty.Value) *objectBuilder
 	return ret
 }
 
-func (b *objectBuilder) Schema() *SchemaBlockType {
+func (b *objectBuilder) Schema() *tfschema.BlockType {
 	return b.schema
 }
 
@@ -188,13 +190,13 @@ func (b *objectBuilder) ObjectVal() cty.Value {
 		wantEty := blockS.Content.ImpliedCtyType()
 		if len(nbs) == 0 {
 			switch blockS.Nesting {
-			case SchemaNestingList:
+			case tfschema.NestingList:
 				if wantEty.HasDynamicTypes() {
 					vals[name] = cty.EmptyTupleVal
 				} else {
 					vals[name] = cty.ListValEmpty(wantEty)
 				}
-			case SchemaNestingSet:
+			case tfschema.NestingSet:
 				vals[name] = cty.SetValEmpty(wantEty)
 			}
 			continue
@@ -204,13 +206,13 @@ func (b *objectBuilder) ObjectVal() cty.Value {
 			subVals[i] = nb.ObjectVal()
 		}
 		switch blockS.Nesting {
-		case SchemaNestingList:
+		case tfschema.NestingList:
 			if wantEty.HasDynamicTypes() {
 				vals[name] = cty.TupleVal(subVals)
 			} else {
 				vals[name] = cty.ListVal(subVals)
 			}
-		case SchemaNestingSet:
+		case tfschema.NestingSet:
 			vals[name] = cty.SetVal(subVals)
 		}
 	}
@@ -252,7 +254,7 @@ func (b *objectBuilder) SetAttr(name string, val cty.Value) {
 	}
 	val, err := convert.Convert(val, attrS.Type)
 	if err != nil {
-		panic(fmt.Sprintf("unsuitable value for %q: %s", name, FormatError(err)))
+		panic(fmt.Sprintf("unsuitable value for %q: %s", name, sdkdiags.FormatError(err)))
 	}
 	b.attrs[name] = val
 }
@@ -263,14 +265,14 @@ func (b *objectBuilder) BlockCount(typeName string) int {
 		panic(fmt.Sprintf("no block type named %q", typeName))
 	}
 	switch blockS.Nesting {
-	case SchemaNestingSingle:
+	case tfschema.NestingSingle:
 		if b.singleBlocks[typeName] == nil {
 			return 0
 		}
 		return 1
-	case SchemaNestingList, SchemaNestingSet:
+	case tfschema.NestingList, tfschema.NestingSet:
 		return len(b.listBlocks[typeName])
-	case SchemaNestingMap:
+	case tfschema.NestingMap:
 		return len(b.mapBlocks[typeName])
 	default:
 		panic(fmt.Sprintf("unknown block type nesting mode %s for %q", blockS.Nesting, typeName))
@@ -326,8 +328,8 @@ func (b *objectBuilder) BlockFromMap(typeName string, key string) ObjectReader {
 }
 
 func (b *objectBuilder) BlockBuilderSingle(typeName string) ObjectBuilder {
-	if blockS, ok := b.schema.NestedBlockTypes[typeName]; !ok || blockS.Nesting != SchemaNestingSingle {
-		panic(fmt.Sprintf("%q is not a nested block type of SchemaNestingSingle", typeName))
+	if blockS, ok := b.schema.NestedBlockTypes[typeName]; !ok || blockS.Nesting != tfschema.NestingSingle {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingSingle", typeName))
 	}
 	ret := b.singleBlocks[typeName]
 	if ret == nil {
@@ -337,8 +339,8 @@ func (b *objectBuilder) BlockBuilderSingle(typeName string) ObjectBuilder {
 }
 
 func (b *objectBuilder) BlockBuilderList(typeName string) []ObjectBuilder {
-	if blockS, ok := b.schema.NestedBlockTypes[typeName]; !ok || (blockS.Nesting != SchemaNestingList && blockS.Nesting != SchemaNestingSet) {
-		panic(fmt.Sprintf("%q is not a nested block type of SchemaNestingList or SchemaNestingSet", typeName))
+	if blockS, ok := b.schema.NestedBlockTypes[typeName]; !ok || (blockS.Nesting != tfschema.NestingList && blockS.Nesting != tfschema.NestingSet) {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingList or tfschema.NestingSet", typeName))
 	}
 	nbs := b.listBlocks[typeName]
 	if len(nbs) == 0 {
@@ -352,8 +354,8 @@ func (b *objectBuilder) BlockBuilderList(typeName string) []ObjectBuilder {
 }
 
 func (b *objectBuilder) BlockBuilderFromList(typeName string, idx int) ObjectBuilder {
-	if blockS, ok := b.schema.NestedBlockTypes[typeName]; !ok || blockS.Nesting != SchemaNestingList {
-		panic(fmt.Sprintf("%q is not a nested block type of SchemaNestingList", typeName))
+	if blockS, ok := b.schema.NestedBlockTypes[typeName]; !ok || blockS.Nesting != tfschema.NestingList {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingList", typeName))
 	}
 	ret := b.listBlocks[typeName][idx]
 	if ret == nil {
@@ -363,8 +365,8 @@ func (b *objectBuilder) BlockBuilderFromList(typeName string, idx int) ObjectBui
 }
 
 func (b *objectBuilder) BlockBuilderMap(typeName string) map[string]ObjectBuilder {
-	if blockS, ok := b.schema.NestedBlockTypes[typeName]; !ok || blockS.Nesting != SchemaNestingMap {
-		panic(fmt.Sprintf("%q is not a nested block type of SchemaNestingMap", typeName))
+	if blockS, ok := b.schema.NestedBlockTypes[typeName]; !ok || blockS.Nesting != tfschema.NestingMap {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingMap", typeName))
 	}
 	nbs := b.mapBlocks[typeName]
 	if len(nbs) == 0 {
@@ -378,8 +380,8 @@ func (b *objectBuilder) BlockBuilderMap(typeName string) map[string]ObjectBuilde
 }
 
 func (b *objectBuilder) BlockBuilderFromMap(typeName string, key string) ObjectBuilder {
-	if blockS, ok := b.schema.NestedBlockTypes[typeName]; !ok || blockS.Nesting != SchemaNestingMap {
-		panic(fmt.Sprintf("%q is not a nested block type of SchemaNestingMap", typeName))
+	if blockS, ok := b.schema.NestedBlockTypes[typeName]; !ok || blockS.Nesting != tfschema.NestingMap {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingMap", typeName))
 	}
 	ret := b.mapBlocks[typeName][key]
 	if ret == nil {
@@ -404,8 +406,8 @@ func (b objectBuilderFull) NewBlockBuilder(typeName string) ObjectBuilderFull {
 
 func (b objectBuilderFull) ReplaceBlockSingle(typeName string, nb ObjectBuilderFull) {
 	blockS, ok := b.schema.NestedBlockTypes[typeName]
-	if !ok || blockS.Nesting != SchemaNestingSingle {
-		panic(fmt.Sprintf("%q is not a nested block type of SchemaNestingSingle", typeName))
+	if !ok || blockS.Nesting != tfschema.NestingSingle {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingSingle", typeName))
 	}
 	if nb == nil {
 		b.objectBuilder.singleBlocks[typeName] = nil
@@ -416,8 +418,8 @@ func (b objectBuilderFull) ReplaceBlockSingle(typeName string, nb ObjectBuilderF
 
 func (b objectBuilderFull) ReplaceBlocksList(typeName string, nbs []ObjectBuilderFull) {
 	blockS, ok := b.schema.NestedBlockTypes[typeName]
-	if !ok || (blockS.Nesting != SchemaNestingList && blockS.Nesting != SchemaNestingSet) {
-		panic(fmt.Sprintf("%q is not a nested block type of SchemaNestingList or SchemaNestingSet", typeName))
+	if !ok || (blockS.Nesting != tfschema.NestingList && blockS.Nesting != tfschema.NestingSet) {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingList or tfschema.NestingSet", typeName))
 	}
 	if len(nbs) == 0 {
 		b.objectBuilder.listBlocks[typeName] = make([]*objectBuilder, 0)
@@ -432,8 +434,8 @@ func (b objectBuilderFull) ReplaceBlocksList(typeName string, nbs []ObjectBuilde
 
 func (b objectBuilderFull) ReplaceBlocksMap(typeName string, nbs map[string]ObjectBuilderFull) {
 	blockS, ok := b.schema.NestedBlockTypes[typeName]
-	if !ok || blockS.Nesting != SchemaNestingMap {
-		panic(fmt.Sprintf("%q is not a nested block type of SchemaNestingMap", typeName))
+	if !ok || blockS.Nesting != tfschema.NestingMap {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingMap", typeName))
 	}
 	if len(nbs) == 0 {
 		b.objectBuilder.listBlocks[typeName] = make([]*objectBuilder, 0)

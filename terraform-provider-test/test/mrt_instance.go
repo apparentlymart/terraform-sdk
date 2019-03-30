@@ -6,6 +6,7 @@ import (
 	"log"
 
 	tfsdk "github.com/apparentlymart/terraform-sdk"
+	"github.com/apparentlymart/terraform-sdk/tfschema"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -28,18 +29,18 @@ type instanceMRTAccess struct {
 
 func instanceManagedResourceType() tfsdk.ManagedResourceType {
 	return tfsdk.NewManagedResourceType(&tfsdk.ResourceType{
-		ConfigSchema: &tfsdk.SchemaBlockType{
-			Attributes: map[string]*tfsdk.SchemaAttribute{
+		ConfigSchema: &tfschema.BlockType{
+			Attributes: map[string]*tfschema.Attribute{
 				"id": {Type: cty.String, Computed: true},
 
 				"type":  {Type: cty.String, Required: true},
 				"image": {Type: cty.String, Required: true},
 			},
-			NestedBlockTypes: map[string]*tfsdk.SchemaNestedBlockType{
+			NestedBlockTypes: map[string]*tfschema.NestedBlockType{
 				"network_interface": {
-					Nesting: tfsdk.SchemaNestingMap,
-					Content: tfsdk.SchemaBlockType{
-						Attributes: map[string]*tfsdk.SchemaAttribute{
+					Nesting: tfschema.NestingMap,
+					Content: tfschema.BlockType{
+						Attributes: map[string]*tfschema.Attribute{
 							"create_public_addrs": {
 								Type:     cty.Bool,
 								Optional: true,
@@ -49,9 +50,9 @@ func instanceManagedResourceType() tfsdk.ManagedResourceType {
 					},
 				},
 				"access": {
-					Nesting: tfsdk.SchemaNestingSingle,
-					Content: tfsdk.SchemaBlockType{
-						Attributes: map[string]*tfsdk.SchemaAttribute{
+					Nesting: tfschema.NestingSingle,
+					Content: tfschema.BlockType{
+						Attributes: map[string]*tfschema.Attribute{
 							"policy": {
 								Type:     cty.DynamicPseudoType,
 								Required: true,

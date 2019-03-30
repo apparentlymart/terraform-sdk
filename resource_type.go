@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/apparentlymart/terraform-sdk/internal/dynfunc"
+	"github.com/apparentlymart/terraform-sdk/tfschema"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -15,7 +16,7 @@ import (
 // NewManagedResourceType and NewDataResourceType to provide managed and
 // data resource type implementations respectively.
 type ResourceType struct {
-	ConfigSchema  *SchemaBlockType
+	ConfigSchema  *tfschema.BlockType
 	SchemaVersion int64 // Only used for managed resource types; leave as zero otherwise
 
 	// CreateFn is a function called when creating an instance of your resource
@@ -76,7 +77,7 @@ func NewManagedResourceType(def *ResourceType) ManagedResourceType {
 
 	schema := def.ConfigSchema
 	if schema == nil {
-		schema = &SchemaBlockType{}
+		schema = &tfschema.BlockType{}
 	}
 
 	readFn := def.ReadFn
@@ -109,7 +110,7 @@ func NewDataResourceType(def *ResourceType) DataResourceType {
 
 	schema := def.ConfigSchema
 	if schema == nil {
-		schema = &SchemaBlockType{}
+		schema = &tfschema.BlockType{}
 	}
 	if def.SchemaVersion != 0 {
 		panic("NewDataResourceType requires def.SchemaVersion == 0")
@@ -130,13 +131,13 @@ func NewDataResourceType(def *ResourceType) DataResourceType {
 }
 
 type managedResourceType struct {
-	configSchema  *SchemaBlockType
+	configSchema  *tfschema.BlockType
 	schemaVersion int64
 
 	createFn, readFn, updateFn, deleteFn interface{}
 }
 
-func (rt managedResourceType) getSchema() (schema *SchemaBlockType, version int64) {
+func (rt managedResourceType) getSchema() (schema *tfschema.BlockType, version int64) {
 	return rt.configSchema, rt.schemaVersion
 }
 
@@ -271,12 +272,12 @@ func (rt managedResourceType) importState(ctx context.Context, client interface{
 }
 
 type dataResourceType struct {
-	configSchema *SchemaBlockType
+	configSchema *tfschema.BlockType
 
 	readFn interface{}
 }
 
-func (rt dataResourceType) getSchema() *SchemaBlockType {
+func (rt dataResourceType) getSchema() *tfschema.BlockType {
 	return rt.configSchema
 }
 

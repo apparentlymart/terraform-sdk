@@ -1,8 +1,9 @@
-package tfsdk
+package tfobj
 
 import (
 	"fmt"
 
+	"github.com/apparentlymart/terraform-sdk/tfschema"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -152,17 +153,17 @@ type planBuilder struct {
 	planned ObjectBuilder
 }
 
-func newPlanBuilder(schema *SchemaBlockType, prior, config, proposed cty.Value) PlanBuilder {
+func newPlanBuilder(schema *tfschema.BlockType, prior, config, proposed cty.Value) PlanBuilder {
 	var priorReader, configReader ObjectReader
 	if !prior.IsNull() {
-		priorReader = schema.NewObjectReader(prior)
+		priorReader = NewObjectReader(schema, prior)
 	}
 	if !config.IsNull() {
-		configReader = schema.NewObjectReader(prior)
+		configReader = NewObjectReader(schema, prior)
 	}
 	var plannedBuilder ObjectBuilder
 	if !proposed.IsNull() {
-		plannedBuilder = schema.NewObjectBuilder(proposed)
+		plannedBuilder = NewObjectBuilder(schema, proposed)
 	}
 	action := Update
 	switch {
@@ -183,7 +184,7 @@ func (b *planBuilder) Action() Action {
 	return b.action
 }
 
-func (b *planBuilder) Schema() *SchemaBlockType {
+func (b *planBuilder) Schema() *tfschema.BlockType {
 	return b.planned.Schema()
 }
 
@@ -323,8 +324,8 @@ func (b *planBuilder) BlockBuilderFromMap(typeName string, key string) ObjectBui
 
 func (b *planBuilder) BlockPlanBuilderSingle(typeName string) PlanBuilder {
 	blockS, ok := b.Schema().NestedBlockTypes[typeName]
-	if !ok || blockS.Nesting != SchemaNestingSingle {
-		panic(fmt.Sprintf("%q is not a nested block type of SchemaNestingSingle", typeName))
+	if !ok || blockS.Nesting != tfschema.NestingSingle {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingSingle", typeName))
 	}
 
 	var priorReader, configReader ObjectReader
@@ -370,8 +371,8 @@ func (b *planBuilder) BlockPlanBuilderList(typeName string) []PlanBuilder {
 
 func (b *planBuilder) BlockPlanBuilderFromList(typeName string, idx int) PlanBuilder {
 	blockS, ok := b.Schema().NestedBlockTypes[typeName]
-	if !ok || blockS.Nesting != SchemaNestingList {
-		panic(fmt.Sprintf("%q is not a nested block type of SchemaNestingList", typeName))
+	if !ok || blockS.Nesting != tfschema.NestingList {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingList", typeName))
 	}
 
 	var priorReader, configReader ObjectReader
@@ -392,8 +393,8 @@ func (b *planBuilder) BlockPlanBuilderFromList(typeName string, idx int) PlanBui
 
 func (b *planBuilder) BlockPlanBuilderMap(typeName string) map[string]PlanBuilder {
 	blockS, ok := b.Schema().NestedBlockTypes[typeName]
-	if !ok || blockS.Nesting != SchemaNestingMap {
-		panic(fmt.Sprintf("%q is not a nested block type of SchemaNestingMap", typeName))
+	if !ok || blockS.Nesting != tfschema.NestingMap {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingMap", typeName))
 	}
 
 	var priorReaders, configReaders map[string]ObjectReader
@@ -434,8 +435,8 @@ func (b *planBuilder) BlockPlanBuilderMap(typeName string) map[string]PlanBuilde
 
 func (b *planBuilder) BlockPlanBuilderFromMap(typeName string, key string) PlanBuilder {
 	blockS, ok := b.Schema().NestedBlockTypes[typeName]
-	if !ok || blockS.Nesting != SchemaNestingMap {
-		panic(fmt.Sprintf("%q is not a nested block type of SchemaNestingMap", typeName))
+	if !ok || blockS.Nesting != tfschema.NestingMap {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingMap", typeName))
 	}
 
 	var priorReader, configReader ObjectReader
@@ -508,7 +509,7 @@ func (b *planBuilder) requireWritable() {
 	}
 }
 
-func (b *planBuilder) subBuilder(schema *SchemaNestedBlockType, prior, config ObjectReader, planned ObjectBuilder) PlanBuilder {
+func (b *planBuilder) subBuilder(schema *tfschema.NestedBlockType, prior, config ObjectReader, planned ObjectBuilder) PlanBuilder {
 	action := Update
 	switch {
 	case config == nil || planned == nil:

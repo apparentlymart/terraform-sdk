@@ -1,22 +1,23 @@
-package tfsdk_test
+package tfschema_test
 
 import (
 	"strings"
 	"testing"
 
-	tfsdk "github.com/apparentlymart/terraform-sdk"
+	"github.com/apparentlymart/terraform-sdk/internal/sdkdiags"
+	"github.com/apparentlymart/terraform-sdk/tfschema"
 	"github.com/google/go-cmp/cmp"
 	"github.com/zclconf/go-cty/cty"
 )
 
 func TestSchemaAttributeValidate(t *testing.T) {
 	tests := map[string]struct {
-		Schema    *tfsdk.SchemaAttribute
+		Schema    *tfschema.Attribute
 		Try       cty.Value
 		WantDiags []string
 	}{
 		"simple primitive type ok": {
-			&tfsdk.SchemaAttribute{
+			&tfschema.Attribute{
 				Type:     cty.String,
 				Optional: true,
 			},
@@ -24,7 +25,7 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			nil,
 		},
 		"missing required argument": {
-			&tfsdk.SchemaAttribute{
+			&tfschema.Attribute{
 				Type:     cty.String,
 				Required: true,
 			},
@@ -34,7 +35,7 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			},
 		},
 		"missing optional argument": {
-			&tfsdk.SchemaAttribute{
+			&tfschema.Attribute{
 				Type:     cty.String,
 				Optional: true,
 			},
@@ -42,7 +43,7 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			nil,
 		},
 		"simple primitive type conversion ok": {
-			&tfsdk.SchemaAttribute{
+			&tfschema.Attribute{
 				Type:     cty.String,
 				Optional: true,
 			},
@@ -50,7 +51,7 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			nil,
 		},
 		"simple primitive type conversion fail": {
-			&tfsdk.SchemaAttribute{
+			&tfschema.Attribute{
 				Type:     cty.Bool,
 				Optional: true,
 			},
@@ -60,7 +61,7 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			},
 		},
 		"object type missing attribute": {
-			&tfsdk.SchemaAttribute{
+			&tfschema.Attribute{
 				Type: cty.Object(map[string]cty.Type{
 					"foo": cty.String,
 				}),
@@ -72,14 +73,14 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			},
 		},
 		"custom validate function ok": {
-			&tfsdk.SchemaAttribute{
+			&tfschema.Attribute{
 				Type:     cty.String,
 				Required: true,
-				ValidateFn: func(v string) tfsdk.Diagnostics {
+				ValidateFn: func(v string) sdkdiags.Diagnostics {
 					if v != "ok" {
-						return tfsdk.Diagnostics{
+						return sdkdiags.Diagnostics{
 							{
-								Severity: tfsdk.Error,
+								Severity: sdkdiags.Error,
 								Summary:  "Not ok",
 							},
 						}
@@ -91,14 +92,14 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			nil,
 		},
 		"custom validate function wrong": {
-			&tfsdk.SchemaAttribute{
+			&tfschema.Attribute{
 				Type:     cty.String,
 				Required: true,
-				ValidateFn: func(v string) tfsdk.Diagnostics {
+				ValidateFn: func(v string) sdkdiags.Diagnostics {
 					if v != "ok" {
-						return tfsdk.Diagnostics{
+						return sdkdiags.Diagnostics{
 							{
-								Severity: tfsdk.Error,
+								Severity: sdkdiags.Error,
 								Summary:  "Not ok",
 							},
 						}
@@ -112,12 +113,12 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			},
 		},
 		"custom validate function type conversion error": {
-			&tfsdk.SchemaAttribute{
+			&tfschema.Attribute{
 				Type:     cty.String,
 				Required: true,
 				// This is not something any provider should really do, but
 				// we want to make sure it produces a reasonable result.
-				ValidateFn: func(v bool) tfsdk.Diagnostics {
+				ValidateFn: func(v bool) sdkdiags.Diagnostics {
 					return nil
 				},
 			},
@@ -127,7 +128,7 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			},
 		},
 		"custom validate function type with incorrect return type": {
-			&tfsdk.SchemaAttribute{
+			&tfschema.Attribute{
 				Type:     cty.String,
 				Optional: true,
 				ValidateFn: func(string) string {
@@ -140,7 +141,7 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			},
 		},
 		"custom validate function type with no return type": {
-			&tfsdk.SchemaAttribute{
+			&tfschema.Attribute{
 				Type:       cty.String,
 				Optional:   true,
 				ValidateFn: func(string) {},
@@ -173,12 +174,12 @@ func TestSchemaAttributeValidate(t *testing.T) {
 
 // diagnosticStringForTests converts a diagnostic into a compact string that
 // is easier to use for matching in test assertions.
-func diagnosticStringForTests(diag tfsdk.Diagnostic) string {
+func diagnosticStringForTests(diag sdkdiags.Diagnostic) string {
 	var buf strings.Builder
 	switch diag.Severity {
-	case tfsdk.Error:
+	case sdkdiags.Error:
 		buf.WriteString("[ERROR] ")
-	case tfsdk.Warning:
+	case sdkdiags.Warning:
 		buf.WriteString("[WARNING] ")
 	default:
 		buf.WriteString("[???] ")
@@ -190,13 +191,13 @@ func diagnosticStringForTests(diag tfsdk.Diagnostic) string {
 	}
 	if len(diag.Path) != 0 {
 		buf.WriteString(" (in ")
-		buf.WriteString(tfsdk.FormatPath(diag.Path))
+		buf.WriteString(sdkdiags.FormatPath(diag.Path))
 		buf.WriteString(")")
 	}
 	return buf.String()
 }
 
-func diagnosticStringsForTests(diags tfsdk.Diagnostics) []string {
+func diagnosticStringsForTests(diags sdkdiags.Diagnostics) []string {
 	ret := make([]string, len(diags))
 	for i, diag := range diags {
 		ret[i] = diagnosticStringForTests(diag)

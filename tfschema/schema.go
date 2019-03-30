@@ -1,20 +1,21 @@
-package tfsdk
+package tfschema
 
 import (
 	"fmt"
 
 	"github.com/apparentlymart/terraform-sdk/internal/dynfunc"
+	"github.com/apparentlymart/terraform-sdk/internal/sdkdiags"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/convert"
 	"github.com/zclconf/go-cty/cty/gocty"
 )
 
-type SchemaBlockType struct {
-	Attributes       map[string]*SchemaAttribute
-	NestedBlockTypes map[string]*SchemaNestedBlockType
+type BlockType struct {
+	Attributes       map[string]*Attribute
+	NestedBlockTypes map[string]*NestedBlockType
 }
 
-type SchemaAttribute struct {
+type Attribute struct {
 	// Type defines the Terraform Language type that is required for values of
 	// this attribute. Set Type to cty.DynamicPseudoType to indicate that any
 	// type is allowed. The ValidateFunc field can be used to provide more
@@ -79,32 +80,32 @@ type SchemaAttribute struct {
 	Default interface{}
 }
 
-type SchemaNestedBlockType struct {
-	Nesting SchemaNestingMode
-	Content SchemaBlockType
+type NestedBlockType struct {
+	Nesting NestingMode
+	Content BlockType
 
 	MaxItems, MinItems int
 }
 
-type SchemaNestingMode int
+type NestingMode int
 
 const (
-	schemaNestingInvalid SchemaNestingMode = iota
-	SchemaNestingSingle
-	SchemaNestingList
-	SchemaNestingMap
-	SchemaNestingSet
+	nestingInvalid NestingMode = iota
+	NestingSingle
+	NestingList
+	NestingMap
+	NestingSet
 )
 
-//go:generate stringer -type=SchemaNestingMode -trimprefix Schema
+//go:generate stringer -type=NestingMode
 
 // Validate checks that the given object value is suitable for the recieving
 // block type, returning diagnostics if not.
-func (b *SchemaBlockType) Validate(val cty.Value) Diagnostics {
-	var diags Diagnostics
+func (b *BlockType) Validate(val cty.Value) sdkdiags.Diagnostics {
+	var diags sdkdiags.Diagnostics
 	if !val.Type().IsObjectType() {
-		diags = diags.Append(Diagnostic{
-			Severity: Error,
+		diags = diags.Append(sdkdiags.Diagnostic{
+			Severity: sdkdiags.Error,
 			Summary:  "Invalid block object",
 			Detail:   "An object value is required to represent this block.",
 		})
@@ -128,19 +129,19 @@ func (b *SchemaBlockType) Validate(val cty.Value) Diagnostics {
 		av := val.GetAttr(name)
 
 		switch blockS.Nesting {
-		case SchemaNestingSingle:
+		case NestingSingle:
 			if !av.IsNull() {
 				blockDiags := blockS.Content.Validate(av)
 				diags = diags.Append(blockDiags.UnderPath(path))
 			}
-		case SchemaNestingList, SchemaNestingMap:
+		case NestingList, NestingMap:
 			for it := av.ElementIterator(); it.Next(); {
 				ek, ev := it.Element()
 				path := path.Index(ek)
 				blockDiags := blockS.Content.Validate(ev)
 				diags = diags.Append(blockDiags.UnderPath(path))
 			}
-		case SchemaNestingSet:
+		case NestingSet:
 			// We handle sets separately because we can't describe a path
 			// through a set element (it has no key to use) and so any errors
 			// in a set block are indicated at the set itself. Nested blocks
@@ -152,8 +153,8 @@ func (b *SchemaBlockType) Validate(val cty.Value) Diagnostics {
 				diags = diags.Append(blockDiags.UnderPath(path))
 			}
 		default:
-			diags = diags.Append(Diagnostic{
-				Severity: Error,
+			diags = diags.Append(sdkdiags.Diagnostic{
+				Severity: sdkdiags.Error,
 				Summary:  "Unsupported nested block mode",
 				Detail:   fmt.Sprintf("Block type %q has an unsupported nested block mode %#v. This is a bug in the provider; please report it in the provider's own issue tracker.", name, blockS.Nesting),
 				Path:     path,
@@ -168,16 +169,16 @@ func (b *SchemaBlockType) Validate(val cty.Value) Diagnostics {
 // attribute, returning diagnostics if not.
 //
 // This method is usually used only indirectly via SchemaBlockType.Validate.
-func (a *SchemaAttribute) Validate(val cty.Value) Diagnostics {
-	var diags Diagnostics
+func (a *Attribute) Validate(val cty.Value) sdkdiags.Diagnostics {
+	var diags sdkdiags.Diagnostics
 
 	if a.Required && val.IsNull() {
 		// This is a poor error message due to our lack of context here. In
 		// normal use a whole-schema validation driver should detect this
 		// case before calling SchemaAttribute.Validate and return a message
 		// with better context.
-		diags = diags.Append(Diagnostic{
-			Severity: Error,
+		diags = diags.Append(sdkdiags.Diagnostic{
+			Severity: sdkdiags.Error,
 			Summary:  "Missing required argument",
 			Detail:   "This argument is required.",
 		})
@@ -185,10 +186,10 @@ func (a *SchemaAttribute) Validate(val cty.Value) Diagnostics {
 
 	convVal, err := convert.Convert(val, a.Type)
 	if err != nil {
-		diags = diags.Append(Diagnostic{
-			Severity: Error,
+		diags = diags.Append(sdkdiags.Diagnostic{
+			Severity: sdkdiags.Error,
 			Summary:  "Invalid argument value",
-			Detail:   fmt.Sprintf("Incorrect value type: %s.", FormatError(err)),
+			Detail:   fmt.Sprintf("Incorrect value type: %s.", sdkdiags.FormatError(err)),
 		})
 	}
 
@@ -217,8 +218,8 @@ func (a *SchemaAttribute) Validate(val cty.Value) Diagnostics {
 	// The validation function gets the already-converted value, for convenience.
 	validate, err := dynfunc.WrapSimpleFunction(a.ValidateFn, convVal)
 	if err != nil {
-		diags = diags.Append(Diagnostic{
-			Severity: Error,
+		diags = diags.Append(sdkdiags.Diagnostic{
+			Severity: sdkdiags.Error,
 			Summary:  "Invalid provider schema",
 			Detail:   fmt.Sprintf("Invalid ValidateFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err),
 		})
@@ -235,7 +236,7 @@ func (a *SchemaAttribute) Validate(val cty.Value) Diagnostics {
 //
 // Will panic if the configured default cannot be converted to the attribute's
 // value type.
-func (a *SchemaAttribute) DefaultValue() cty.Value {
+func (a *Attribute) DefaultValue() cty.Value {
 	if a.Default == nil {
 		return cty.NullVal(a.Type)
 	}
@@ -248,12 +249,12 @@ func (a *SchemaAttribute) DefaultValue() cty.Value {
 }
 
 // Null returns a null value of the type implied by the receiving schema.
-func (b *SchemaBlockType) Null() cty.Value {
+func (b *BlockType) Null() cty.Value {
 	return cty.NullVal(b.ImpliedCtyType())
 }
 
 // Unknown returns an unknown value of the type implied by the receiving schema.
-func (b *SchemaBlockType) Unknown() cty.Value {
+func (b *BlockType) Unknown() cty.Value {
 	return cty.UnknownVal(b.ImpliedCtyType())
 }
 
@@ -269,7 +270,7 @@ func (b *SchemaBlockType) Unknown() cty.Value {
 // This function produces reasonable results only for a valid schema. Use
 // InternalValidate on the schema in provider tests to check that it is correct.
 // When called on an invalid schema, the result may be incorrect or incomplete.
-func (b *SchemaBlockType) ImpliedCtyType() cty.Type {
+func (b *BlockType) ImpliedCtyType() cty.Type {
 	atys := make(map[string]cty.Type)
 	for name, attrS := range b.Attributes {
 		atys[name] = attrS.Type
@@ -280,9 +281,9 @@ func (b *SchemaBlockType) ImpliedCtyType() cty.Type {
 	return cty.Object(atys)
 }
 
-func (b *SchemaNestedBlockType) impliedCtyType() cty.Type {
+func (b *NestedBlockType) impliedCtyType() cty.Type {
 	nested := b.Content.ImpliedCtyType()
-	if b.Nesting == SchemaNestingSingle {
+	if b.Nesting == NestingSingle {
 		return nested // easy case
 	}
 
@@ -296,11 +297,11 @@ func (b *SchemaNestedBlockType) impliedCtyType() cty.Type {
 	}
 
 	switch b.Nesting {
-	case SchemaNestingList:
+	case NestingList:
 		return cty.List(nested)
-	case SchemaNestingSet:
+	case NestingSet:
 		return cty.Set(nested)
-	case SchemaNestingMap:
+	case NestingMap:
 		return cty.Map(nested)
 	default:
 		// Invalid, so what we return here is undefined as far as our godoc is
@@ -315,7 +316,7 @@ func (b *SchemaNestedBlockType) impliedCtyType() cty.Type {
 //
 // The result is guaranteed to also conform to the schema. This function may
 // panic if the schema is incorrectly specified.
-func (b *SchemaBlockType) ApplyDefaults(given cty.Value) cty.Value {
+func (b *BlockType) ApplyDefaults(given cty.Value) cty.Value {
 	vals := make(map[string]cty.Value)
 
 	for name, attrS := range b.Attributes {
@@ -349,15 +350,15 @@ func (b *SchemaBlockType) ApplyDefaults(given cty.Value) cty.Value {
 // by Terraform Core for values representing nested block types: they will always
 // be known, and (aside from SchemaNestedSingle) never be null. If these
 // guarantees don't hold then this function will panic.
-func (b *SchemaNestedBlockType) ApplyDefaults(given cty.Value) cty.Value {
+func (b *NestedBlockType) ApplyDefaults(given cty.Value) cty.Value {
 	wantTy := b.impliedCtyType()
 	switch b.Nesting {
-	case SchemaNestingSingle:
+	case NestingSingle:
 		if given.IsNull() {
 			return given
 		}
 		return b.Content.ApplyDefaults(given)
-	case SchemaNestingList:
+	case NestingList:
 		vals := make([]cty.Value, 0, given.LengthInt())
 		for it := given.ElementIterator(); it.Next(); {
 			_, gv := it.Element()
@@ -373,7 +374,7 @@ func (b *SchemaNestedBlockType) ApplyDefaults(given cty.Value) cty.Value {
 			return cty.ListValEmpty(wantTy.ElementType())
 		}
 		return cty.ListVal(vals)
-	case SchemaNestingMap:
+	case NestingMap:
 		vals := make(map[string]cty.Value, given.LengthInt())
 		for it := given.ElementIterator(); it.Next(); {
 			k, gv := it.Element()
@@ -389,7 +390,7 @@ func (b *SchemaNestedBlockType) ApplyDefaults(given cty.Value) cty.Value {
 			return cty.MapValEmpty(wantTy.ElementType())
 		}
 		return cty.MapVal(vals)
-	case SchemaNestingSet:
+	case NestingSet:
 		vals := make([]cty.Value, 0, given.LengthInt())
 		for it := given.ElementIterator(); it.Next(); {
 			_, gv := it.Element()

@@ -6,14 +6,15 @@ import (
 	"net/url"
 
 	tfsdk "github.com/apparentlymart/terraform-sdk"
+	"github.com/apparentlymart/terraform-sdk/tfschema"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/zclconf/go-cty/cty"
 )
 
 func Provider() *tfsdk.Provider {
 	return &tfsdk.Provider{
-		ConfigSchema: &tfsdk.SchemaBlockType{
-			Attributes: map[string]*tfsdk.SchemaAttribute{
+		ConfigSchema: &tfschema.BlockType{
+			Attributes: map[string]*tfschema.Attribute{
 				"optional_string": {
 					Type:     cty.String,
 					Optional: true,

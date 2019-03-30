@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/apparentlymart/terraform-sdk/internal/dynfunc"
+	"github.com/apparentlymart/terraform-sdk/tfschema"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -13,7 +14,7 @@ import (
 // a function that returns a pointer to a Provider object describing the
 // resource types and other objects exposed by the provider.
 type Provider struct {
-	ConfigSchema         *SchemaBlockType
+	ConfigSchema         *tfschema.BlockType
 	ManagedResourceTypes map[string]ManagedResourceType
 	DataResourceTypes    map[string]DataResourceType
 
@@ -29,7 +30,7 @@ type Provider struct {
 // inside this package. To implement a managed resource type, create a
 // *ResourceType value and pass it to NewManagedResourceType.
 type ManagedResourceType interface {
-	getSchema() (schema *SchemaBlockType, version int64)
+	getSchema() (schema *tfschema.BlockType, version int64)
 	validate(obj cty.Value) Diagnostics
 	upgradeState(oldJSON []byte, oldVersion int) (cty.Value, Diagnostics)
 	refresh(ctx context.Context, client interface{}, old cty.Value) (cty.Value, Diagnostics)
@@ -45,7 +46,7 @@ type ManagedResourceType interface {
 // inside this package. To implement a managed resource type, create a
 // *ResourceType value and pass it to NewDataResourceType.
 type DataResourceType interface {
-	getSchema() *SchemaBlockType
+	getSchema() *tfschema.BlockType
 	validate(obj cty.Value) Diagnostics
 	read(ctx context.Context, client interface{}, config cty.Value) (cty.Value, Diagnostics)
 }

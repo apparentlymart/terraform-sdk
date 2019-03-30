@@ -5,6 +5,7 @@ import (
 	"log"
 
 	tfsdk "github.com/apparentlymart/terraform-sdk"
+	"github.com/apparentlymart/terraform-sdk/tfschema"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -17,8 +18,8 @@ type echoDRT struct {
 
 func echoDataResourceType() tfsdk.DataResourceType {
 	return tfsdk.NewDataResourceType(&tfsdk.ResourceType{
-		ConfigSchema: &tfsdk.SchemaBlockType{
-			Attributes: map[string]*tfsdk.SchemaAttribute{
+		ConfigSchema: &tfschema.BlockType{
+			Attributes: map[string]*tfschema.Attribute{
 				"given":  {Type: cty.String, Required: true},
 				"result": {Type: cty.String, Computed: true},
 
