@@ -89,6 +89,9 @@ func (r *objectReaderVal) BlockCount(blockType string) int {
 	blockS, obj := r.blockVal(blockType)
 	switch blockS.Nesting {
 	case SchemaNestingSingle:
+		if obj.IsNull() {
+			return 0
+		}
 		return 1
 	default:
 		if obj.IsNull() || !obj.IsKnown() {
