@@ -54,11 +54,13 @@ func NewObjectBuilder(schema *tfschema.BlockType, initial cty.Value) ObjectBuild
 	return newObjectBuilder(schema, initial)
 }
 
-// NewObjectBuilderFrom constructs an ObjectBuilder with the same schema as
-// the given ObjectReader and an initial object value equal to that of
-// the reader.
-func NewObjectBuilderFrom(r ObjectReader) ObjectBuilder {
-	return newObjectBuilder(r.Schema(), r.ObjectVal())
+// DeriveNewObject constructs an ObjectBuilderFull with the same schema as the
+// given ObjectReader and an initial object value equal to that of the reader.
+//
+// This is useful when a new value is mostly equal to an existing value but
+// needs a few surgical changes made in-place.
+func DeriveNewObject(r ObjectReader) ObjectBuilderFull {
+	return objectBuilderFull{newObjectBuilder(r.Schema(), r.ObjectVal())}
 }
 
 // ObjectBuilderFull is an extension of ObjectBuilder that additionally allows
