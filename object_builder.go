@@ -92,8 +92,8 @@ type ObjectBuilderFull interface {
 
 // NewObjectBuilderFull is like NewObjectBuilder except that it constructs an
 // ObjectBuilderFull instead of just an ObjectBuilder.
-func NewObjectBuilderFull(schema *SchemaBlockType, initial cty.Value) ObjectBuilderFull {
-	ob := newObjectBuilder(schema, initial)
+func (s *SchemaBlockType) NewObjectBuilderFull(initial cty.Value) ObjectBuilderFull {
+	ob := newObjectBuilder(s, initial)
 	return objectBuilderFull{ob}
 }
 
