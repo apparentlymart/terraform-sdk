@@ -142,7 +142,7 @@ func (rt managedResourceType) getSchema() (schema *tfschema.BlockType, version i
 }
 
 func (rt managedResourceType) validate(obj cty.Value) Diagnostics {
-	return rt.configSchema.Validate(obj)
+	return ValidateBlockObject(rt.configSchema, obj)
 }
 
 func (rt managedResourceType) upgradeState(oldJSON []byte, oldVersion int) (cty.Value, Diagnostics) {
@@ -282,7 +282,7 @@ func (rt dataResourceType) getSchema() *tfschema.BlockType {
 }
 
 func (rt dataResourceType) validate(obj cty.Value) Diagnostics {
-	return rt.configSchema.Validate(obj)
+	return ValidateBlockObject(rt.configSchema, obj)
 }
 
 func (rt dataResourceType) read(ctx context.Context, client interface{}, config cty.Value) (cty.Value, Diagnostics) {

@@ -1,16 +1,16 @@
-package tfschema_test
+package tfsdk_test
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/apparentlymart/terraform-sdk/internal/sdkdiags"
+	tfsdk "github.com/apparentlymart/terraform-sdk"
 	"github.com/apparentlymart/terraform-sdk/tfschema"
 	"github.com/google/go-cmp/cmp"
 	"github.com/zclconf/go-cty/cty"
 )
 
-func TestSchemaAttributeValidate(t *testing.T) {
+func TestValidateAttrValue(t *testing.T) {
 	tests := map[string]struct {
 		Schema    *tfschema.Attribute
 		Try       cty.Value
@@ -76,11 +76,11 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			&tfschema.Attribute{
 				Type:     cty.String,
 				Required: true,
-				ValidateFn: func(v string) sdkdiags.Diagnostics {
+				ValidateFn: func(v string) tfsdk.Diagnostics {
 					if v != "ok" {
-						return sdkdiags.Diagnostics{
+						return tfsdk.Diagnostics{
 							{
-								Severity: sdkdiags.Error,
+								Severity: tfsdk.Error,
 								Summary:  "Not ok",
 							},
 						}
@@ -95,11 +95,11 @@ func TestSchemaAttributeValidate(t *testing.T) {
 			&tfschema.Attribute{
 				Type:     cty.String,
 				Required: true,
-				ValidateFn: func(v string) sdkdiags.Diagnostics {
+				ValidateFn: func(v string) tfsdk.Diagnostics {
 					if v != "ok" {
-						return sdkdiags.Diagnostics{
+						return tfsdk.Diagnostics{
 							{
-								Severity: sdkdiags.Error,
+								Severity: tfsdk.Error,
 								Summary:  "Not ok",
 							},
 						}
@@ -118,7 +118,7 @@ func TestSchemaAttributeValidate(t *testing.T) {
 				Required: true,
 				// This is not something any provider should really do, but
 				// we want to make sure it produces a reasonable result.
-				ValidateFn: func(v bool) sdkdiags.Diagnostics {
+				ValidateFn: func(v bool) tfsdk.Diagnostics {
 					return nil
 				},
 			},
@@ -155,7 +155,7 @@ func TestSchemaAttributeValidate(t *testing.T) {
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			gotDiags := test.Schema.Validate(test.Try)
+			gotDiags := tfsdk.ValidateAttrValue(test.Schema, test.Try)
 
 			if len(test.WantDiags) > 0 {
 				gotDiagsStr := diagnosticStringsForTests(gotDiags)
@@ -174,12 +174,12 @@ func TestSchemaAttributeValidate(t *testing.T) {
 
 // diagnosticStringForTests converts a diagnostic into a compact string that
 // is easier to use for matching in test assertions.
-func diagnosticStringForTests(diag sdkdiags.Diagnostic) string {
+func diagnosticStringForTests(diag tfsdk.Diagnostic) string {
 	var buf strings.Builder
 	switch diag.Severity {
-	case sdkdiags.Error:
+	case tfsdk.Error:
 		buf.WriteString("[ERROR] ")
-	case sdkdiags.Warning:
+	case tfsdk.Warning:
 		buf.WriteString("[WARNING] ")
 	default:
 		buf.WriteString("[???] ")
@@ -191,13 +191,13 @@ func diagnosticStringForTests(diag sdkdiags.Diagnostic) string {
 	}
 	if len(diag.Path) != 0 {
 		buf.WriteString(" (in ")
-		buf.WriteString(sdkdiags.FormatPath(diag.Path))
+		buf.WriteString(tfsdk.FormatPath(diag.Path))
 		buf.WriteString(")")
 	}
 	return buf.String()
 }
 
-func diagnosticStringsForTests(diags sdkdiags.Diagnostics) []string {
+func diagnosticStringsForTests(diags tfsdk.Diagnostics) []string {
 	ret := make([]string, len(diags))
 	for i, diag := range diags {
 		ret[i] = diagnosticStringForTests(diag)

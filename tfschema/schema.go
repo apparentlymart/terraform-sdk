@@ -3,10 +3,7 @@ package tfschema
 import (
 	"fmt"
 
-	"github.com/apparentlymart/terraform-sdk/internal/dynfunc"
-	"github.com/apparentlymart/terraform-sdk/internal/sdkdiags"
 	"github.com/zclconf/go-cty/cty"
-	"github.com/zclconf/go-cty/cty/convert"
 	"github.com/zclconf/go-cty/cty/gocty"
 )
 
@@ -98,138 +95,6 @@ const (
 )
 
 //go:generate stringer -type=NestingMode
-
-// Validate checks that the given object value is suitable for the recieving
-// block type, returning diagnostics if not.
-func (b *BlockType) Validate(val cty.Value) sdkdiags.Diagnostics {
-	var diags sdkdiags.Diagnostics
-	if !val.Type().IsObjectType() {
-		diags = diags.Append(sdkdiags.Diagnostic{
-			Severity: sdkdiags.Error,
-			Summary:  "Invalid block object",
-			Detail:   "An object value is required to represent this block.",
-		})
-		return diags
-	}
-
-	// Capacity 3 here is so that we have room for a nested block type, an
-	// index, and a nested attribute name without allocating more. Each loop
-	// below will mutate this backing array but not the original empty slice.
-	path := make(cty.Path, 0, 3)
-
-	for name, attrS := range b.Attributes {
-		path := path.GetAttr(name)
-		av := val.GetAttr(name)
-		attrDiags := attrS.Validate(av)
-		diags = diags.Append(attrDiags.UnderPath(path))
-	}
-
-	for name, blockS := range b.NestedBlockTypes {
-		path := path.GetAttr(name)
-		av := val.GetAttr(name)
-
-		switch blockS.Nesting {
-		case NestingSingle:
-			if !av.IsNull() {
-				blockDiags := blockS.Content.Validate(av)
-				diags = diags.Append(blockDiags.UnderPath(path))
-			}
-		case NestingList, NestingMap:
-			for it := av.ElementIterator(); it.Next(); {
-				ek, ev := it.Element()
-				path := path.Index(ek)
-				blockDiags := blockS.Content.Validate(ev)
-				diags = diags.Append(blockDiags.UnderPath(path))
-			}
-		case NestingSet:
-			// We handle sets separately because we can't describe a path
-			// through a set element (it has no key to use) and so any errors
-			// in a set block are indicated at the set itself. Nested blocks
-			// backed by sets are fraught with oddities like these, so providers
-			// should avoid using them except for historical compatibilty.
-			for it := av.ElementIterator(); it.Next(); {
-				_, ev := it.Element()
-				blockDiags := blockS.Content.Validate(ev)
-				diags = diags.Append(blockDiags.UnderPath(path))
-			}
-		default:
-			diags = diags.Append(sdkdiags.Diagnostic{
-				Severity: sdkdiags.Error,
-				Summary:  "Unsupported nested block mode",
-				Detail:   fmt.Sprintf("Block type %q has an unsupported nested block mode %#v. This is a bug in the provider; please report it in the provider's own issue tracker.", name, blockS.Nesting),
-				Path:     path,
-			})
-		}
-	}
-
-	return diags
-}
-
-// Validate checks that the given value is a suitable value for the receiving
-// attribute, returning diagnostics if not.
-//
-// This method is usually used only indirectly via SchemaBlockType.Validate.
-func (a *Attribute) Validate(val cty.Value) sdkdiags.Diagnostics {
-	var diags sdkdiags.Diagnostics
-
-	if a.Required && val.IsNull() {
-		// This is a poor error message due to our lack of context here. In
-		// normal use a whole-schema validation driver should detect this
-		// case before calling SchemaAttribute.Validate and return a message
-		// with better context.
-		diags = diags.Append(sdkdiags.Diagnostic{
-			Severity: sdkdiags.Error,
-			Summary:  "Missing required argument",
-			Detail:   "This argument is required.",
-		})
-	}
-
-	convVal, err := convert.Convert(val, a.Type)
-	if err != nil {
-		diags = diags.Append(sdkdiags.Diagnostic{
-			Severity: sdkdiags.Error,
-			Summary:  "Invalid argument value",
-			Detail:   fmt.Sprintf("Incorrect value type: %s.", sdkdiags.FormatError(err)),
-		})
-	}
-
-	if diags.HasErrors() {
-		// If we've already got errors then we'll skip calling the provider's
-		// custom validate function, since this avoids the need for that
-		// function to be resilient to already-detected problems, and avoids
-		// producing duplicate error messages.
-		return diags
-	}
-
-	if convVal.IsNull() {
-		// Null-ness is already handled by the a.Required flag, so if an
-		// optional argument is null we'll save the validation function from
-		// having to also deal with it.
-		return diags
-	}
-
-	if !convVal.IsKnown() {
-		// If the value isn't known yet then we'll defer any further validation
-		// of it until it becomes known, since custom validation functions
-		// are not expected to deal with unknown values.
-		return diags
-	}
-
-	// The validation function gets the already-converted value, for convenience.
-	validate, err := dynfunc.WrapSimpleFunction(a.ValidateFn, convVal)
-	if err != nil {
-		diags = diags.Append(sdkdiags.Diagnostic{
-			Severity: sdkdiags.Error,
-			Summary:  "Invalid provider schema",
-			Detail:   fmt.Sprintf("Invalid ValidateFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err),
-		})
-		return diags
-	}
-
-	moreDiags := validate()
-	diags = diags.Append(moreDiags)
-	return diags
-}
 
 // DefaultValue returns the cty.Value representation of the receiving attribute's
 // default, as specified in the Default field.

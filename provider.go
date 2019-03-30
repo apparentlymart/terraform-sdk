@@ -56,7 +56,7 @@ type DataResourceType interface {
 // altering some of the values within to produce a final configuration for
 // Terraform Core to use when interacting with this provider instance.
 func (p *Provider) PrepareConfig(proposedVal cty.Value) (cty.Value, Diagnostics) {
-	diags := p.ConfigSchema.Validate(proposedVal)
+	diags := ValidateBlockObject(p.ConfigSchema, proposedVal)
 	return proposedVal, diags
 }
 
