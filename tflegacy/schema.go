@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-//go:generate stringer -type=ValueType valuetype.go
+//go:generate stringer -type=ValueType
 
 // ValueType is an enum of the type kinds that can be represented by a schema.
 type ValueType int
@@ -249,6 +249,13 @@ const (
 // SchemaDefaultFunc is a function called to return a default value for
 // a field.
 type SchemaDefaultFunc func() (interface{}, error)
+
+// SchemaDiffSuppressFunc is a function which can be used to determine
+// whether a detected diff on a schema element is "valid" or not, and
+// suppress it from the plan if necessary.
+//
+// Return true if the diff should be suppressed, false to retain it.
+type SchemaDiffSuppressFunc func(k, old, new string, d *ResourceData) bool
 
 // EnvDefaultFunc is a helper function that returns the value of the
 // given environment variable, if one exists, or the default value
