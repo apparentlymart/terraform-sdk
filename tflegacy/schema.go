@@ -3,6 +3,15 @@ package tflegacy
 import (
 	"fmt"
 	"os"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/apparentlymart/terraform-sdk/internal/shim"
+	"github.com/mitchellh/mapstructure"
+
+	"github.com/mitchellh/copystructure"
 )
 
 //go:generate stringer -type=ValueType
@@ -299,4 +308,1282 @@ type SchemaValidateFunc func(interface{}, string) ([]string, []error)
 
 func (s *Schema) GoString() string {
 	return fmt.Sprintf("*%#v", *s)
+}
+
+// schemaMap is a wrapper that adds nice functions on top of schemas.
+type schemaMap map[string]*Schema
+
+func (m schemaMap) panicOnError() bool {
+	return false
+}
+
+// Data returns a ResourceData for the given schema, state, and diff.
+//
+// The diff is optional.
+func (m schemaMap) Data(s *InstanceState, d *InstanceDiff) (*ResourceData, error) {
+	return &ResourceData{
+		schema:       m,
+		state:        s,
+		diff:         d,
+		panicOnError: m.panicOnError(),
+	}, nil
+}
+
+// DeepCopy returns a copy of this schemaMap. The copy can be safely modified
+// without affecting the original.
+func (m *schemaMap) DeepCopy() schemaMap {
+	copy, err := copystructure.Config{Lock: true}.Copy(m)
+	if err != nil {
+		panic(err)
+	}
+	return *copy.(*schemaMap)
+}
+
+// Diff returns the diff for a resource given the schema map,
+// state, and configuration.
+func (m schemaMap) Diff(s *InstanceState, c *ResourceConfig, customizeDiff CustomizeDiffFunc, meta interface{}, handleRequiresNew bool) (*InstanceDiff, error) {
+	result := new(InstanceDiff)
+	result.Attributes = make(map[string]*ResourceAttrDiff)
+
+	// Make sure to mark if the resource is tainted
+	if s != nil {
+		result.DestroyTainted = s.Tainted
+	}
+
+	d := &ResourceData{
+		schema:       m,
+		state:        s,
+		config:       c,
+		panicOnError: m.panicOnError(),
+	}
+
+	for k, schema := range m {
+		err := m.diff(k, schema, result, d, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Remove any nil diffs just to keep things clean
+	for k, v := range result.Attributes {
+		if v == nil {
+			delete(result.Attributes, k)
+		}
+	}
+
+	// If this is a non-destroy diff, call any custom diff logic that has been
+	// defined.
+	if !result.DestroyTainted && customizeDiff != nil {
+		mc := m.DeepCopy()
+		rd := newResourceDiff(mc, c, s, result)
+		if err := customizeDiff(rd, meta); err != nil {
+			return nil, err
+		}
+		for _, k := range rd.UpdatedKeys() {
+			err := m.diff(k, mc[k], result, rd, false)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if handleRequiresNew {
+		// If the diff requires a new resource, then we recompute the diff
+		// so we have the complete new resource diff, and preserve the
+		// RequiresNew fields where necessary so the user knows exactly what
+		// caused that.
+		if result.RequiresNew() {
+			// Create the new diff
+			result2 := new(InstanceDiff)
+			result2.Attributes = make(map[string]*ResourceAttrDiff)
+
+			// Preserve the DestroyTainted flag
+			result2.DestroyTainted = result.DestroyTainted
+
+			// Reset the data to not contain state. We have to call init()
+			// again in order to reset the FieldReaders.
+			d.state = nil
+			d.init()
+
+			// Perform the diff again
+			for k, schema := range m {
+				err := m.diff(k, schema, result2, d, false)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			// Re-run customization
+			if !result2.DestroyTainted && customizeDiff != nil {
+				mc := m.DeepCopy()
+				rd := newResourceDiff(mc, c, d.state, result2)
+				if err := customizeDiff(rd, meta); err != nil {
+					return nil, err
+				}
+				for _, k := range rd.UpdatedKeys() {
+					err := m.diff(k, mc[k], result2, rd, false)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+
+			// Force all the fields to not force a new since we know what we
+			// want to force new.
+			for k, attr := range result2.Attributes {
+				if attr == nil {
+					continue
+				}
+
+				if attr.RequiresNew {
+					attr.RequiresNew = false
+				}
+
+				if s != nil {
+					attr.Old = s.Attributes[k]
+				}
+			}
+
+			// Now copy in all the requires new diffs...
+			for k, attr := range result.Attributes {
+				if attr == nil {
+					continue
+				}
+
+				newAttr, ok := result2.Attributes[k]
+				if !ok {
+					newAttr = attr
+				}
+
+				if attr.RequiresNew {
+					newAttr.RequiresNew = true
+				}
+
+				result2.Attributes[k] = newAttr
+			}
+
+			// And set the diff!
+			result = result2
+		}
+
+	}
+
+	// Go through and detect all of the ComputedWhens now that we've
+	// finished the diff.
+	// TODO
+
+	if result.Empty() {
+		// If we don't have any diff elements, just return nil
+		return nil, nil
+	}
+
+	return result, nil
+}
+
+// Validate validates the configuration against this schema mapping.
+func (m schemaMap) Validate(c *ResourceConfig) ([]string, []error) {
+	return m.validateObject("", m, c)
+}
+
+// InternalValidate validates the format of this schema. This should be called
+// from a unit test (and not in user-path code) to verify that a schema
+// is properly built.
+func (m schemaMap) InternalValidate(topSchemaMap schemaMap) error {
+	return m.internalValidate(topSchemaMap, false)
+}
+
+func (m schemaMap) internalValidate(topSchemaMap schemaMap, attrsOnly bool) error {
+	if topSchemaMap == nil {
+		topSchemaMap = m
+	}
+	for k, v := range m {
+		if v.Type == TypeInvalid {
+			return fmt.Errorf("%s: Type must be specified", k)
+		}
+
+		if v.Optional && v.Required {
+			return fmt.Errorf("%s: Optional or Required must be set, not both", k)
+		}
+
+		if v.Required && v.Computed {
+			return fmt.Errorf("%s: Cannot be both Required and Computed", k)
+		}
+
+		if !v.Required && !v.Optional && !v.Computed {
+			return fmt.Errorf("%s: One of optional, required, or computed must be set", k)
+		}
+
+		computedOnly := v.Computed && !v.Optional
+
+		isBlock := false
+
+		switch v.ConfigMode {
+		case SchemaConfigModeBlock:
+			if _, ok := v.Elem.(*Resource); !ok {
+				return fmt.Errorf("%s: ConfigMode of block is allowed only when Elem is *schema.Resource", k)
+			}
+			if attrsOnly {
+				return fmt.Errorf("%s: ConfigMode of block cannot be used in child of schema with ConfigMode of attribute", k)
+			}
+			if computedOnly {
+				return fmt.Errorf("%s: ConfigMode of block cannot be used for computed schema", k)
+			}
+			isBlock = true
+		case SchemaConfigModeAttr:
+			// anything goes
+		case SchemaConfigModeAuto:
+			// Since "Auto" for Elem: *Resource would create a nested block,
+			// and that's impossible inside an attribute, we require it to be
+			// explicitly overridden as mode "Attr" for clarity.
+			if _, ok := v.Elem.(*Resource); ok {
+				isBlock = true
+				if attrsOnly {
+					return fmt.Errorf("%s: in *schema.Resource with ConfigMode of attribute, so must also have ConfigMode of attribute", k)
+				}
+			}
+		default:
+			return fmt.Errorf("%s: invalid ConfigMode value", k)
+		}
+
+		if v.Computed && v.Default != nil {
+			return fmt.Errorf("%s: Default must be nil if computed", k)
+		}
+
+		if v.Required && v.Default != nil {
+			return fmt.Errorf("%s: Default cannot be set with Required", k)
+		}
+
+		if len(v.ComputedWhen) > 0 && !v.Computed {
+			return fmt.Errorf("%s: ComputedWhen can only be set with Computed", k)
+		}
+
+		if len(v.ConflictsWith) > 0 && v.Required {
+			return fmt.Errorf("%s: ConflictsWith cannot be set with Required", k)
+		}
+
+		if len(v.ConflictsWith) > 0 {
+			for _, key := range v.ConflictsWith {
+				parts := strings.Split(key, ".")
+				sm := topSchemaMap
+				var target *Schema
+				for _, part := range parts {
+					// Skip index fields
+					if _, err := strconv.Atoi(part); err == nil {
+						continue
+					}
+
+					var ok bool
+					if target, ok = sm[part]; !ok {
+						return fmt.Errorf("%s: ConflictsWith references unknown attribute (%s)", k, key)
+					}
+
+					if subResource, ok := target.Elem.(*Resource); ok {
+						sm = schemaMap(subResource.Schema)
+					}
+				}
+				if target == nil {
+					return fmt.Errorf("%s: ConflictsWith cannot find target attribute (%s), sm: %#v", k, key, sm)
+				}
+				if target.Required {
+					return fmt.Errorf("%s: ConflictsWith cannot contain Required attribute (%s)", k, key)
+				}
+
+				if len(target.ComputedWhen) > 0 {
+					return fmt.Errorf("%s: ConflictsWith cannot contain Computed(When) attribute (%s)", k, key)
+				}
+			}
+		}
+
+		if v.Type == TypeList || v.Type == TypeSet {
+			if v.Elem == nil {
+				return fmt.Errorf("%s: Elem must be set for lists", k)
+			}
+
+			if v.Default != nil {
+				return fmt.Errorf("%s: Default is not valid for lists or sets", k)
+			}
+
+			if v.Type != TypeSet && v.Set != nil {
+				return fmt.Errorf("%s: Set can only be set for TypeSet", k)
+			}
+
+			switch t := v.Elem.(type) {
+			case *Resource:
+				attrsOnly := attrsOnly || v.ConfigMode == SchemaConfigModeAttr
+
+				if err := schemaMap(t.Schema).internalValidate(topSchemaMap, attrsOnly); err != nil {
+					return err
+				}
+			case *Schema:
+				bad := t.Computed || t.Optional || t.Required
+				if bad {
+					return fmt.Errorf(
+						"%s: Elem must have only Type set", k)
+				}
+			}
+		} else {
+			if v.MaxItems > 0 || v.MinItems > 0 {
+				return fmt.Errorf("%s: MaxItems and MinItems are only supported on lists or sets", k)
+			}
+		}
+
+		if v.AsSingle {
+			if v.MaxItems != 1 {
+				return fmt.Errorf("%s: MaxItems must be 1 when AsSingle is set", k)
+			}
+			if v.Type != TypeList && v.Type != TypeSet {
+				return fmt.Errorf("%s: AsSingle can be used only with TypeList and TypeSet schemas", k)
+			}
+		}
+
+		// Computed-only field
+		if v.Computed && !v.Optional {
+			if v.ValidateFunc != nil {
+				return fmt.Errorf("%s: ValidateFunc is for validating user input, "+
+					"there's nothing to validate on computed-only field", k)
+			}
+			if v.DiffSuppressFunc != nil {
+				return fmt.Errorf("%s: DiffSuppressFunc is for suppressing differences"+
+					" between config and state representation. "+
+					"There is no config for computed-only field, nothing to compare.", k)
+			}
+		}
+
+		if v.ValidateFunc != nil {
+			switch v.Type {
+			case TypeList, TypeSet:
+				return fmt.Errorf("%s: ValidateFunc is not yet supported on lists or sets.", k)
+			}
+		}
+
+		if v.Deprecated == "" && v.Removed == "" {
+			if !isValidFieldName(k) {
+				return fmt.Errorf("%s: Field name may only contain lowercase alphanumeric characters & underscores.", k)
+			}
+		}
+	}
+
+	return nil
+}
+
+func isValidFieldName(name string) bool {
+	re := regexp.MustCompile("^[a-z0-9_]+$")
+	return re.MatchString(name)
+}
+
+// resourceDiffer is an interface that is used by the private diff functions.
+// This helps facilitate diff logic for both ResourceData and ResoureDiff with
+// minimal divergence in code.
+type resourceDiffer interface {
+	diffChange(string) (interface{}, interface{}, bool, bool, bool)
+	Get(string) interface{}
+	GetChange(string) (interface{}, interface{})
+	GetOk(string) (interface{}, bool)
+	HasChange(string) bool
+	Id() string
+}
+
+func (m schemaMap) diff(
+	k string,
+	schema *Schema,
+	diff *InstanceDiff,
+	d resourceDiffer,
+	all bool) error {
+
+	unsupressedDiff := new(InstanceDiff)
+	unsupressedDiff.Attributes = make(map[string]*ResourceAttrDiff)
+
+	var err error
+	switch schema.Type {
+	case TypeBool, TypeInt, TypeFloat, TypeString:
+		err = m.diffString(k, schema, unsupressedDiff, d, all)
+	case TypeList:
+		err = m.diffList(k, schema, unsupressedDiff, d, all)
+	case TypeMap:
+		err = m.diffMap(k, schema, unsupressedDiff, d, all)
+	case TypeSet:
+		err = m.diffSet(k, schema, unsupressedDiff, d, all)
+	default:
+		err = fmt.Errorf("%s: unknown type %#v", k, schema.Type)
+	}
+
+	for attrK, attrV := range unsupressedDiff.Attributes {
+		switch rd := d.(type) {
+		case *ResourceData:
+			if schema.DiffSuppressFunc != nil && attrV != nil &&
+				schema.DiffSuppressFunc(attrK, attrV.Old, attrV.New, rd) {
+				// If this attr diff is suppressed, we may still need it in the
+				// overall diff if it's contained within a set. Rather than
+				// dropping the diff, make it a NOOP.
+				if !all {
+					continue
+				}
+
+				attrV = &ResourceAttrDiff{
+					Old: attrV.Old,
+					New: attrV.Old,
+				}
+			}
+		}
+		diff.Attributes[attrK] = attrV
+	}
+
+	return err
+}
+
+func (m schemaMap) diffList(
+	k string,
+	schema *Schema,
+	diff *InstanceDiff,
+	d resourceDiffer,
+	all bool) error {
+	o, n, _, computedList, customized := d.diffChange(k)
+	if computedList {
+		n = nil
+	}
+	nSet := n != nil
+
+	// If we have an old value and no new value is set or will be
+	// computed once all variables can be interpolated and we're
+	// computed, then nothing has changed.
+	if o != nil && n == nil && !computedList && schema.Computed {
+		return nil
+	}
+
+	if o == nil {
+		o = []interface{}{}
+	}
+	if n == nil {
+		n = []interface{}{}
+	}
+	if s, ok := o.(*Set); ok {
+		o = s.List()
+	}
+	if s, ok := n.(*Set); ok {
+		n = s.List()
+	}
+	os := o.([]interface{})
+	vs := n.([]interface{})
+
+	// If the new value was set, and the two are equal, then we're done.
+	// We have to do this check here because sets might be NOT
+	// reflect.DeepEqual so we need to wait until we get the []interface{}
+	if !all && nSet && reflect.DeepEqual(os, vs) {
+		return nil
+	}
+
+	// Get the counts
+	oldLen := len(os)
+	newLen := len(vs)
+	oldStr := strconv.FormatInt(int64(oldLen), 10)
+
+	// If the whole list is computed, then say that the # is computed
+	if computedList {
+		diff.Attributes[k+".#"] = &ResourceAttrDiff{
+			Old:         oldStr,
+			NewComputed: true,
+			RequiresNew: schema.ForceNew,
+		}
+		return nil
+	}
+
+	// If the counts are not the same, then record that diff
+	changed := oldLen != newLen
+	computed := oldLen == 0 && newLen == 0 && schema.Computed
+	if changed || computed || all {
+		countSchema := &Schema{
+			Type:     TypeInt,
+			Computed: schema.Computed,
+			ForceNew: schema.ForceNew,
+		}
+
+		newStr := ""
+		if !computed {
+			newStr = strconv.FormatInt(int64(newLen), 10)
+		} else {
+			oldStr = ""
+		}
+
+		diff.Attributes[k+".#"] = countSchema.finalizeDiff(
+			&ResourceAttrDiff{
+				Old: oldStr,
+				New: newStr,
+			},
+			customized,
+		)
+	}
+
+	// Figure out the maximum
+	maxLen := oldLen
+	if newLen > maxLen {
+		maxLen = newLen
+	}
+
+	switch t := schema.Elem.(type) {
+	case *Resource:
+		// This is a complex resource
+		for i := 0; i < maxLen; i++ {
+			for k2, schema := range t.Schema {
+				subK := fmt.Sprintf("%s.%d.%s", k, i, k2)
+				err := m.diff(subK, schema, diff, d, all)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	case *Schema:
+		// Copy the schema so that we can set Computed/ForceNew from
+		// the parent schema (the TypeList).
+		t2 := *t
+		t2.ForceNew = schema.ForceNew
+
+		// This is just a primitive element, so go through each and
+		// just diff each.
+		for i := 0; i < maxLen; i++ {
+			subK := fmt.Sprintf("%s.%d", k, i)
+			err := m.diff(subK, &t2, diff, d, all)
+			if err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("%s: unknown element type (internal)", k)
+	}
+
+	return nil
+}
+
+func (m schemaMap) diffMap(
+	k string,
+	schema *Schema,
+	diff *InstanceDiff,
+	d resourceDiffer,
+	all bool) error {
+	prefix := k + "."
+
+	// First get all the values from the state
+	var stateMap, configMap map[string]string
+	o, n, _, nComputed, customized := d.diffChange(k)
+	if err := mapstructure.WeakDecode(o, &stateMap); err != nil {
+		return fmt.Errorf("%s: %s", k, err)
+	}
+	if err := mapstructure.WeakDecode(n, &configMap); err != nil {
+		return fmt.Errorf("%s: %s", k, err)
+	}
+
+	// Keep track of whether the state _exists_ at all prior to clearing it
+	stateExists := o != nil
+
+	// Delete any count values, since we don't use those
+	delete(configMap, "%")
+	delete(stateMap, "%")
+
+	// Check if the number of elements has changed.
+	oldLen, newLen := len(stateMap), len(configMap)
+	changed := oldLen != newLen
+	if oldLen != 0 && newLen == 0 && schema.Computed {
+		changed = false
+	}
+
+	// It is computed if we have no old value, no new value, the schema
+	// says it is computed, and it didn't exist in the state before. The
+	// last point means: if it existed in the state, even empty, then it
+	// has already been computed.
+	computed := oldLen == 0 && newLen == 0 && schema.Computed && !stateExists
+
+	// If the count has changed or we're computed, then add a diff for the
+	// count. "nComputed" means that the new value _contains_ a value that
+	// is computed. We don't do granular diffs for this yet, so we mark the
+	// whole map as computed.
+	if changed || computed || nComputed {
+		countSchema := &Schema{
+			Type:     TypeInt,
+			Computed: schema.Computed || nComputed,
+			ForceNew: schema.ForceNew,
+		}
+
+		oldStr := strconv.FormatInt(int64(oldLen), 10)
+		newStr := ""
+		if !computed && !nComputed {
+			newStr = strconv.FormatInt(int64(newLen), 10)
+		} else {
+			oldStr = ""
+		}
+
+		diff.Attributes[k+".%"] = countSchema.finalizeDiff(
+			&ResourceAttrDiff{
+				Old: oldStr,
+				New: newStr,
+			},
+			customized,
+		)
+	}
+
+	// If the new map is nil and we're computed, then ignore it.
+	if n == nil && schema.Computed {
+		return nil
+	}
+
+	// Now we compare, preferring values from the config map
+	for k, v := range configMap {
+		old, ok := stateMap[k]
+		delete(stateMap, k)
+
+		if old == v && ok && !all {
+			continue
+		}
+
+		diff.Attributes[prefix+k] = schema.finalizeDiff(
+			&ResourceAttrDiff{
+				Old: old,
+				New: v,
+			},
+			customized,
+		)
+	}
+	for k, v := range stateMap {
+		diff.Attributes[prefix+k] = schema.finalizeDiff(
+			&ResourceAttrDiff{
+				Old:        v,
+				NewRemoved: true,
+			},
+			customized,
+		)
+	}
+
+	return nil
+}
+
+func (m schemaMap) diffSet(
+	k string,
+	schema *Schema,
+	diff *InstanceDiff,
+	d resourceDiffer,
+	all bool) error {
+
+	o, n, _, computedSet, customized := d.diffChange(k)
+	if computedSet {
+		n = nil
+	}
+	nSet := n != nil
+
+	// If we have an old value and no new value is set or will be
+	// computed once all variables can be interpolated and we're
+	// computed, then nothing has changed.
+	if o != nil && n == nil && !computedSet && schema.Computed {
+		return nil
+	}
+
+	if o == nil {
+		o = schema.ZeroValue().(*Set)
+	}
+	if n == nil {
+		n = schema.ZeroValue().(*Set)
+	}
+	os := o.(*Set)
+	ns := n.(*Set)
+
+	// If the new value was set, compare the listCode's to determine if
+	// the two are equal. Comparing listCode's instead of the actual values
+	// is needed because there could be computed values in the set which
+	// would result in false positives while comparing.
+	if !all && nSet && reflect.DeepEqual(os.listCode(), ns.listCode()) {
+		return nil
+	}
+
+	// Get the counts
+	oldLen := os.Len()
+	newLen := ns.Len()
+	oldStr := strconv.Itoa(oldLen)
+	newStr := strconv.Itoa(newLen)
+
+	// Build a schema for our count
+	countSchema := &Schema{
+		Type:     TypeInt,
+		Computed: schema.Computed,
+		ForceNew: schema.ForceNew,
+	}
+
+	// If the set computed then say that the # is computed
+	if computedSet || schema.Computed && !nSet {
+		// If # already exists, equals 0 and no new set is supplied, there
+		// is nothing to record in the diff
+		count, ok := d.GetOk(k + ".#")
+		if ok && count.(int) == 0 && !nSet && !computedSet {
+			return nil
+		}
+
+		// Set the count but make sure that if # does not exist, we don't
+		// use the zeroed value
+		countStr := strconv.Itoa(count.(int))
+		if !ok {
+			countStr = ""
+		}
+
+		diff.Attributes[k+".#"] = countSchema.finalizeDiff(
+			&ResourceAttrDiff{
+				Old:         countStr,
+				NewComputed: true,
+			},
+			customized,
+		)
+		return nil
+	}
+
+	// If the counts are not the same, then record that diff
+	changed := oldLen != newLen
+	if changed || all {
+		diff.Attributes[k+".#"] = countSchema.finalizeDiff(
+			&ResourceAttrDiff{
+				Old: oldStr,
+				New: newStr,
+			},
+			customized,
+		)
+	}
+
+	// Build the list of codes that will make up our set. This is the
+	// removed codes as well as all the codes in the new codes.
+	codes := make([][]string, 2)
+	codes[0] = os.Difference(ns).listCode()
+	codes[1] = ns.listCode()
+	for _, list := range codes {
+		for _, code := range list {
+			switch t := schema.Elem.(type) {
+			case *Resource:
+				// This is a complex resource
+				for k2, schema := range t.Schema {
+					subK := fmt.Sprintf("%s.%s.%s", k, code, k2)
+					err := m.diff(subK, schema, diff, d, true)
+					if err != nil {
+						return err
+					}
+				}
+			case *Schema:
+				// Copy the schema so that we can set Computed/ForceNew from
+				// the parent schema (the TypeSet).
+				t2 := *t
+				t2.ForceNew = schema.ForceNew
+
+				// This is just a primitive element, so go through each and
+				// just diff each.
+				subK := fmt.Sprintf("%s.%s", k, code)
+				err := m.diff(subK, &t2, diff, d, true)
+				if err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("%s: unknown element type (internal)", k)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (m schemaMap) diffString(
+	k string,
+	schema *Schema,
+	diff *InstanceDiff,
+	d resourceDiffer,
+	all bool) error {
+	var originalN interface{}
+	var os, ns string
+	o, n, _, computed, customized := d.diffChange(k)
+	if schema.StateFunc != nil && n != nil {
+		originalN = n
+		n = schema.StateFunc(n)
+	}
+	nraw := n
+	if nraw == nil && o != nil {
+		nraw = schema.Type.Zero()
+	}
+	if err := mapstructure.WeakDecode(o, &os); err != nil {
+		return fmt.Errorf("%s: %s", k, err)
+	}
+	if err := mapstructure.WeakDecode(nraw, &ns); err != nil {
+		return fmt.Errorf("%s: %s", k, err)
+	}
+
+	if os == ns && !all && !computed {
+		// They're the same value. If there old value is not blank or we
+		// have an ID, then return right away since we're already setup.
+		if os != "" || d.Id() != "" {
+			return nil
+		}
+
+		// Otherwise, only continue if we're computed
+		if !schema.Computed {
+			return nil
+		}
+	}
+
+	removed := false
+	if o != nil && n == nil && !computed {
+		removed = true
+	}
+	if removed && schema.Computed {
+		return nil
+	}
+
+	diff.Attributes[k] = schema.finalizeDiff(
+		&ResourceAttrDiff{
+			Old:         os,
+			New:         ns,
+			NewExtra:    originalN,
+			NewRemoved:  removed,
+			NewComputed: computed,
+		},
+		customized,
+	)
+
+	return nil
+}
+
+func (m schemaMap) validate(
+	k string,
+	schema *Schema,
+	c *ResourceConfig) ([]string, []error) {
+	raw, ok := c.Get(k)
+	if !ok && schema.DefaultFunc != nil {
+		// We have a dynamic default. Check if we have a value.
+		var err error
+		raw, err = schema.DefaultFunc()
+		if err != nil {
+			return nil, []error{fmt.Errorf(
+				"%q, error loading default: %s", k, err)}
+		}
+
+		// We're okay as long as we had a value set
+		ok = raw != nil
+	}
+	if !ok {
+		if schema.Required {
+			return nil, []error{fmt.Errorf(
+				"%q: required field is not set", k)}
+		}
+
+		return nil, nil
+	}
+
+	if !schema.Required && !schema.Optional {
+		// This is a computed-only field
+		return nil, []error{fmt.Errorf(
+			"%q: this field cannot be set", k)}
+	}
+
+	if raw == shim.UnknownVariableValue {
+		// If the value is unknown then we can't validate it yet.
+		// In particular, this avoids spurious type errors where downstream
+		// validation code sees UnknownVariableValue as being just a string.
+		return nil, nil
+	}
+
+	err := m.validateConflictingAttributes(k, schema, c)
+	if err != nil {
+		return nil, []error{err}
+	}
+
+	return m.validateType(k, raw, schema, c)
+}
+
+func (m schemaMap) validateConflictingAttributes(
+	k string,
+	schema *Schema,
+	c *ResourceConfig) error {
+
+	if len(schema.ConflictsWith) == 0 {
+		return nil
+	}
+
+	for _, conflictingKey := range schema.ConflictsWith {
+		if raw, ok := c.Get(conflictingKey); ok {
+			if raw == shim.UnknownVariableValue {
+				// An unknown value might become unset (null) once known, so
+				// we must defer validation until it's known.
+				continue
+			}
+			return fmt.Errorf(
+				"%q: conflicts with %s", k, conflictingKey)
+		}
+	}
+
+	return nil
+}
+
+func (m schemaMap) validateList(
+	k string,
+	raw interface{},
+	schema *Schema,
+	c *ResourceConfig) ([]string, []error) {
+	// first check if the list is wholly unknown
+	if s, ok := raw.(string); ok {
+		if s == shim.UnknownVariableValue {
+			return nil, nil
+		}
+	}
+
+	// We use reflection to verify the slice because you can't
+	// case to []interface{} unless the slice is exactly that type.
+	rawV := reflect.ValueOf(raw)
+
+	// If we support promotion and the raw value isn't a slice, wrap
+	// it in []interface{} and check again.
+	if schema.PromoteSingle && rawV.Kind() != reflect.Slice {
+		raw = []interface{}{raw}
+		rawV = reflect.ValueOf(raw)
+	}
+
+	if rawV.Kind() != reflect.Slice {
+		return nil, []error{fmt.Errorf(
+			"%s: should be a list", k)}
+	}
+
+	// Validate length
+	if schema.MaxItems > 0 && rawV.Len() > schema.MaxItems {
+		return nil, []error{fmt.Errorf(
+			"%s: attribute supports %d item maximum, config has %d declared", k, schema.MaxItems, rawV.Len())}
+	}
+
+	if schema.MinItems > 0 && rawV.Len() < schema.MinItems {
+		return nil, []error{fmt.Errorf(
+			"%s: attribute supports %d item as a minimum, config has %d declared", k, schema.MinItems, rawV.Len())}
+	}
+
+	// Now build the []interface{}
+	raws := make([]interface{}, rawV.Len())
+	for i, _ := range raws {
+		raws[i] = rawV.Index(i).Interface()
+	}
+
+	var ws []string
+	var es []error
+	for i, raw := range raws {
+		key := fmt.Sprintf("%s.%d", k, i)
+
+		// Reify the key value from the ResourceConfig.
+		// If the list was computed we have all raw values, but some of these
+		// may be known in the config, and aren't individually marked as Computed.
+		if r, ok := c.Get(key); ok {
+			raw = r
+		}
+
+		var ws2 []string
+		var es2 []error
+		switch t := schema.Elem.(type) {
+		case *Resource:
+			// This is a sub-resource
+			ws2, es2 = m.validateObject(key, t.Schema, c)
+		case *Schema:
+			ws2, es2 = m.validateType(key, raw, t, c)
+		}
+
+		if len(ws2) > 0 {
+			ws = append(ws, ws2...)
+		}
+		if len(es2) > 0 {
+			es = append(es, es2...)
+		}
+	}
+
+	return ws, es
+}
+
+func (m schemaMap) validateMap(
+	k string,
+	raw interface{},
+	schema *Schema,
+	c *ResourceConfig) ([]string, []error) {
+	// first check if the list is wholly unknown
+	if s, ok := raw.(string); ok {
+		if s == shim.UnknownVariableValue {
+			return nil, nil
+		}
+	}
+
+	// We use reflection to verify the slice because you can't
+	// case to []interface{} unless the slice is exactly that type.
+	rawV := reflect.ValueOf(raw)
+	switch rawV.Kind() {
+	case reflect.String:
+		// If raw and reified are equal, this is a string and should
+		// be rejected.
+		reified, reifiedOk := c.Get(k)
+		if reifiedOk && raw == reified && !c.IsComputed(k) {
+			return nil, []error{fmt.Errorf("%s: should be a map", k)}
+		}
+		// Otherwise it's likely raw is an interpolation.
+		return nil, nil
+	case reflect.Map:
+	case reflect.Slice:
+	default:
+		return nil, []error{fmt.Errorf("%s: should be a map", k)}
+	}
+
+	// If it is not a slice, validate directly
+	if rawV.Kind() != reflect.Slice {
+		mapIface := rawV.Interface()
+		if _, errs := validateMapValues(k, mapIface.(map[string]interface{}), schema); len(errs) > 0 {
+			return nil, errs
+		}
+		if schema.ValidateFunc != nil {
+			return schema.ValidateFunc(mapIface, k)
+		}
+		return nil, nil
+	}
+
+	// It is a slice, verify that all the elements are maps
+	raws := make([]interface{}, rawV.Len())
+	for i, _ := range raws {
+		raws[i] = rawV.Index(i).Interface()
+	}
+
+	for _, raw := range raws {
+		v := reflect.ValueOf(raw)
+		if v.Kind() != reflect.Map {
+			return nil, []error{fmt.Errorf(
+				"%s: should be a map", k)}
+		}
+		mapIface := v.Interface()
+		if _, errs := validateMapValues(k, mapIface.(map[string]interface{}), schema); len(errs) > 0 {
+			return nil, errs
+		}
+	}
+
+	if schema.ValidateFunc != nil {
+		validatableMap := make(map[string]interface{})
+		for _, raw := range raws {
+			for k, v := range raw.(map[string]interface{}) {
+				validatableMap[k] = v
+			}
+		}
+
+		return schema.ValidateFunc(validatableMap, k)
+	}
+
+	return nil, nil
+}
+
+func validateMapValues(k string, m map[string]interface{}, schema *Schema) ([]string, []error) {
+	for key, raw := range m {
+		valueType, err := getValueType(k, schema)
+		if err != nil {
+			return nil, []error{err}
+		}
+
+		switch valueType {
+		case TypeBool:
+			var n bool
+			if err := mapstructure.WeakDecode(raw, &n); err != nil {
+				return nil, []error{fmt.Errorf("%s (%s): %s", k, key, err)}
+			}
+		case TypeInt:
+			var n int
+			if err := mapstructure.WeakDecode(raw, &n); err != nil {
+				return nil, []error{fmt.Errorf("%s (%s): %s", k, key, err)}
+			}
+		case TypeFloat:
+			var n float64
+			if err := mapstructure.WeakDecode(raw, &n); err != nil {
+				return nil, []error{fmt.Errorf("%s (%s): %s", k, key, err)}
+			}
+		case TypeString:
+			var n string
+			if err := mapstructure.WeakDecode(raw, &n); err != nil {
+				return nil, []error{fmt.Errorf("%s (%s): %s", k, key, err)}
+			}
+		default:
+			panic(fmt.Sprintf("Unknown validation type: %#v", schema.Type))
+		}
+	}
+	return nil, nil
+}
+
+func getValueType(k string, schema *Schema) (ValueType, error) {
+	if schema.Elem == nil {
+		return TypeString, nil
+	}
+	if vt, ok := schema.Elem.(ValueType); ok {
+		return vt, nil
+	}
+
+	// If a Schema is provided to a Map, we use the Type of that schema
+	// as the type for each element in the Map.
+	if s, ok := schema.Elem.(*Schema); ok {
+		return s.Type, nil
+	}
+
+	if _, ok := schema.Elem.(*Resource); ok {
+		// TODO: We don't actually support this (yet)
+		// but silently pass the validation, until we decide
+		// how to handle nested structures in maps
+		return TypeString, nil
+	}
+	return 0, fmt.Errorf("%s: unexpected map value type: %#v", k, schema.Elem)
+}
+
+func (m schemaMap) validateObject(
+	k string,
+	schema map[string]*Schema,
+	c *ResourceConfig) ([]string, []error) {
+	raw, _ := c.Get(k)
+	if _, ok := raw.(map[string]interface{}); !ok && !c.IsComputed(k) {
+		return nil, []error{fmt.Errorf(
+			"%s: expected object, got %s",
+			k, reflect.ValueOf(raw).Kind())}
+	}
+
+	var ws []string
+	var es []error
+	for subK, s := range schema {
+		key := subK
+		if k != "" {
+			key = fmt.Sprintf("%s.%s", k, subK)
+		}
+
+		ws2, es2 := m.validate(key, s, c)
+		if len(ws2) > 0 {
+			ws = append(ws, ws2...)
+		}
+		if len(es2) > 0 {
+			es = append(es, es2...)
+		}
+	}
+
+	// Detect any extra/unknown keys and report those as errors.
+	if m, ok := raw.(map[string]interface{}); ok {
+		for subk, _ := range m {
+			if _, ok := schema[subk]; !ok {
+				if subk == TimeoutsConfigKey {
+					continue
+				}
+				es = append(es, fmt.Errorf(
+					"%s: invalid or unknown key: %s", k, subk))
+			}
+		}
+	}
+
+	return ws, es
+}
+
+func (m schemaMap) validatePrimitive(
+	k string,
+	raw interface{},
+	schema *Schema,
+	c *ResourceConfig) ([]string, []error) {
+	// Catch if the user gave a complex type where a primitive was
+	// expected, so we can return a friendly error message that
+	// doesn't contain Go type system terminology.
+	switch reflect.ValueOf(raw).Type().Kind() {
+	case reflect.Slice:
+		return nil, []error{
+			fmt.Errorf("%s must be a single value, not a list", k),
+		}
+	case reflect.Map:
+		return nil, []error{
+			fmt.Errorf("%s must be a single value, not a map", k),
+		}
+	default: // ok
+	}
+
+	if c.IsComputed(k) {
+		// If the key is being computed, then it is not an error as
+		// long as it's not a slice or map.
+		return nil, nil
+	}
+
+	var decoded interface{}
+	switch schema.Type {
+	case TypeBool:
+		// Verify that we can parse this as the correct type
+		var n bool
+		if err := mapstructure.WeakDecode(raw, &n); err != nil {
+			return nil, []error{fmt.Errorf("%s: %s", k, err)}
+		}
+		decoded = n
+	case TypeInt:
+		// Verify that we can parse this as an int
+		var n int
+		if err := mapstructure.WeakDecode(raw, &n); err != nil {
+			return nil, []error{fmt.Errorf("%s: %s", k, err)}
+		}
+		decoded = n
+	case TypeFloat:
+		// Verify that we can parse this as an int
+		var n float64
+		if err := mapstructure.WeakDecode(raw, &n); err != nil {
+			return nil, []error{fmt.Errorf("%s: %s", k, err)}
+		}
+		decoded = n
+	case TypeString:
+		// Verify that we can parse this as a string
+		var n string
+		if err := mapstructure.WeakDecode(raw, &n); err != nil {
+			return nil, []error{fmt.Errorf("%s: %s", k, err)}
+		}
+		decoded = n
+	default:
+		panic(fmt.Sprintf("Unknown validation type: %#v", schema.Type))
+	}
+
+	if schema.ValidateFunc != nil {
+		return schema.ValidateFunc(decoded, k)
+	}
+
+	return nil, nil
+}
+
+func (m schemaMap) validateType(
+	k string,
+	raw interface{},
+	schema *Schema,
+	c *ResourceConfig) ([]string, []error) {
+	var ws []string
+	var es []error
+	switch schema.Type {
+	case TypeSet, TypeList:
+		ws, es = m.validateList(k, raw, schema, c)
+	case TypeMap:
+		ws, es = m.validateMap(k, raw, schema, c)
+	default:
+		ws, es = m.validatePrimitive(k, raw, schema, c)
+	}
+
+	if schema.Deprecated != "" {
+		ws = append(ws, fmt.Sprintf(
+			"%q: [DEPRECATED] %s", k, schema.Deprecated))
+	}
+
+	if schema.Removed != "" {
+		es = append(es, fmt.Errorf(
+			"%q: [REMOVED] %s", k, schema.Removed))
+	}
+
+	return ws, es
+}
+
+// Zero returns the zero value for a type.
+func (t ValueType) Zero() interface{} {
+	switch t {
+	case TypeInvalid:
+		return nil
+	case TypeBool:
+		return false
+	case TypeInt:
+		return 0
+	case TypeFloat:
+		return 0.0
+	case TypeString:
+		return ""
+	case TypeList:
+		return []interface{}{}
+	case TypeMap:
+		return map[string]interface{}{}
+	case TypeSet:
+		return new(Set)
+	case typeObject:
+		return map[string]interface{}{}
+	default:
+		panic(fmt.Sprintf("unknown type %s", t))
+	}
 }

@@ -28,3 +28,13 @@ type ResourceData struct {
 
 	panicOnError bool
 }
+
+// getResult is the internal structure that is generated when a Get
+// is called that contains some extra data that might be used.
+type getResult struct {
+	Value          interface{}
+	ValueProcessed interface{}
+	Computed       bool
+	Exists         bool
+	Schema         *Schema
+}

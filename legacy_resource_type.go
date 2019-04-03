@@ -35,8 +35,14 @@ func (rt legacyManagedResourceType) getSchema() (schema *tfschema.BlockType, ver
 }
 
 func (rt legacyManagedResourceType) validate(obj cty.Value) Diagnostics {
-	// TODO: Implement
-	panic("not implemented")
+	oldSchema := rt.r.Schema
+	schema, _ := rt.getSchema()
+
+	config := tflegacy.NewResourceConfigShimmed(obj, schema)
+	tflegacy.FixupAsSingleResourceConfigIn(config, oldSchema)
+
+	warns, errs := rt.r.Validate(config)
+	return diagnosticsFromWarnsAndErrs(warns, errs)
 }
 
 func (rt legacyManagedResourceType) upgradeState(oldJSON []byte, oldVersion int) (cty.Value, Diagnostics) {

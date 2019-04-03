@@ -189,3 +189,14 @@ type StateUpgradeFunc func(rawState map[string]interface{}, meta interface{}) (m
 
 // See Resource documentation.
 type CustomizeDiffFunc func(*ResourceDiff, interface{}) error
+
+// Validate validates the resource configuration against the resource type schema.
+func (r *Resource) Validate(c *ResourceConfig) ([]string, []error) {
+	warns, errs := schemaMap(r.Schema).Validate(c)
+
+	if r.DeprecationMessage != "" {
+		warns = append(warns, r.DeprecationMessage)
+	}
+
+	return warns, errs
+}
