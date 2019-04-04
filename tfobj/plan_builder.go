@@ -89,6 +89,11 @@ type PlanBuilder interface {
 	// the planned new value for use during the apply step.
 	ConfigReader() ObjectReader
 
+	// RequiresReplace returns the set of paths that require the target object
+	// to be replaced, rather than updated in-place. This has meaning only
+	// when the plan action is Update.
+	RequiresReplace() cty.PathSet
+
 	// CanProvideAttrDefault returns true if and only if the attribute of the
 	// given name is marked as Computed in the schema and that attribute has
 	// a null value in the user configuration. In that case, a provider is
@@ -110,6 +115,15 @@ type PlanBuilder interface {
 	// of the appropriate type for the given attribute. It just avoids the
 	// need for the caller to construct such a value.
 	SetAttrNull(name string)
+
+	// SetAttrRequiresReplacement marks a given attribute as requiring the
+	// target object to be replaced, as opposed to updated in-place. This has
+	// meaning only when the plan's change type is Update.
+	//
+	// It is not possible to un-mark an attribute via this interface. If you
+	// really want to do it, call RequiresReplace to get a copy of the underlying
+	// path set and modify it directly before returning from the Plan function.
+	SetAttrRequiresReplacement(name string)
 
 	// The BlockPlanBuilder... family of methods echoes the BlockBuilder...
 	// family of methods from the ObjectBuilder type but they each return
@@ -153,11 +167,13 @@ const (
 )
 
 type planBuilder struct {
-	action  Action
-	schema  *tfschema.BlockType
-	prior   ObjectReader
-	config  ObjectReader
-	planned ObjectBuilder
+	action          Action
+	schema          *tfschema.BlockType
+	basePath        cty.Path
+	prior           ObjectReader
+	config          ObjectReader
+	planned         ObjectBuilder
+	requiresReplace cty.PathSet
 }
 
 // NewPlanReader constructs a PlanReader for an already-created plan, whose
@@ -169,17 +185,17 @@ func NewPlanReader(schema *tfschema.BlockType, prior, planned cty.Value) PlanRea
 	// get some weird behavior, but that would be a very strange thing to do.
 	// (If you're a provider developer reading this: please don't do it; we
 	// might break this implementation detail in a future release.)
-	return newPlanBuilder(schema, prior, cty.NilVal, planned)
+	return newPlanBuilder(schema, nil, prior, cty.NilVal, planned)
 }
 
 // NewPlanBuilder constructs a PlanBuilder with the given prior, config, and
 // proposed objects, ready to be used to customize the proposed object and
 // ultimately create a planned new object to return.
 func NewPlanBuilder(schema *tfschema.BlockType, prior, config, planned cty.Value) PlanBuilder {
-	return newPlanBuilder(schema, prior, config, planned)
+	return newPlanBuilder(schema, nil, prior, config, planned)
 }
 
-func newPlanBuilder(schema *tfschema.BlockType, prior, config, proposed cty.Value) PlanBuilder {
+func newPlanBuilder(schema *tfschema.BlockType, basePath cty.Path, prior, config, proposed cty.Value) PlanBuilder {
 	var priorReader, configReader ObjectReader
 	if prior != cty.NilVal && !prior.IsNull() {
 		priorReader = NewObjectReader(schema, prior)
@@ -199,11 +215,13 @@ func newPlanBuilder(schema *tfschema.BlockType, prior, config, proposed cty.Valu
 		action = Create
 	}
 	return &planBuilder{
-		schema:  schema,
-		action:  action,
-		prior:   priorReader,
-		config:  configReader,
-		planned: plannedBuilder,
+		schema:          schema,
+		action:          action,
+		basePath:        basePath,
+		prior:           priorReader,
+		config:          configReader,
+		planned:         plannedBuilder,
+		requiresReplace: cty.NewPathSet(),
 	}
 }
 
@@ -228,6 +246,12 @@ func (b *planBuilder) ConfigReader() ObjectReader {
 		panic("configuration is available only during the plan phase")
 	}
 	return b.config
+}
+
+func (b *planBuilder) RequiresReplace() cty.PathSet {
+	// We subtract the empty set here just as a way to copy the underlying set
+	// so the caller can't mess up our internal state.
+	return b.requiresReplace.Subtract(cty.NewPathSet())
 }
 
 func (b *planBuilder) Attr(name string) cty.Value {
@@ -303,6 +327,17 @@ func (b *planBuilder) SetAttrNull(name string) {
 	b.SetAttr(name, cty.NullVal(attrS.Type))
 }
 
+func (b *planBuilder) SetAttrRequiresReplacement(name string) {
+	_, ok := b.Schema().Attributes[name]
+	if !ok {
+		panic(fmt.Sprintf("%q is not an attribute", name))
+	}
+	path := make(cty.Path, 0, len(b.basePath)+1)
+	path = append(path, b.basePath...)
+	path = path.GetAttr(name)
+	b.requiresReplace.AddAllSteps(path)
+}
+
 func (b *planBuilder) BlockCount(typeName string) int {
 	return b.planned.BlockCount(typeName)
 }
@@ -371,7 +406,8 @@ func (b *planBuilder) BlockPlanBuilderSingle(typeName string) PlanBuilder {
 		plannedBuilder = b.planned.BlockBuilderSingle(typeName)
 	}
 
-	return b.subBuilder(blockS, priorReader, configReader, plannedBuilder)
+	subPath := cty.Path(nil).GetAttr(typeName)
+	return b.subBuilder(blockS, subPath, priorReader, configReader, plannedBuilder)
 }
 
 func (b *planBuilder) BlockPlanBuilderList(typeName string) []PlanBuilder {
@@ -418,7 +454,8 @@ func (b *planBuilder) BlockPlanBuilderFromList(typeName string, idx int) PlanBui
 		plannedBuilder = b.planned.BlockBuilderFromList(typeName, idx)
 	}
 
-	return b.subBuilder(blockS, priorReader, configReader, plannedBuilder)
+	subPath := cty.Path(nil).GetAttr(typeName).Index(cty.NumberIntVal(int64(idx)))
+	return b.subBuilder(blockS, subPath, priorReader, configReader, plannedBuilder)
 }
 
 func (b *planBuilder) BlockPlanBuilderMap(typeName string) map[string]PlanBuilder {
@@ -453,8 +490,10 @@ func (b *planBuilder) BlockPlanBuilderMap(typeName string) map[string]PlanBuilde
 
 	ret := make(map[string]PlanBuilder, len(names))
 	for k := range names {
+		subPath := cty.Path(nil).GetAttr(typeName).Index(cty.StringVal(k))
 		ret[k] = b.subBuilder(
 			blockS,
+			subPath,
 			priorReaders[k],
 			configReaders[k],
 			plannedBuilders[k],
@@ -482,7 +521,8 @@ func (b *planBuilder) BlockPlanBuilderFromMap(typeName string, key string) PlanB
 		plannedBuilder = b.planned.BlockBuilderFromMap(typeName, key)
 	}
 
-	return b.subBuilder(blockS, priorReader, configReader, plannedBuilder)
+	subPath := cty.Path(nil).GetAttr(typeName).Index(cty.StringVal(key))
+	return b.subBuilder(blockS, subPath, priorReader, configReader, plannedBuilder)
 }
 
 func (b *planBuilder) BlockPlanSingle(typeName string) PlanReader {
@@ -539,7 +579,7 @@ func (b *planBuilder) requireWritable() {
 	}
 }
 
-func (b *planBuilder) subBuilder(schema *tfschema.NestedBlockType, prior, config ObjectReader, planned ObjectBuilder) PlanBuilder {
+func (b *planBuilder) subBuilder(schema *tfschema.NestedBlockType, subPath cty.Path, prior, config ObjectReader, planned ObjectBuilder) PlanBuilder {
 	action := Update
 	switch {
 	case planned == nil:
@@ -547,10 +587,16 @@ func (b *planBuilder) subBuilder(schema *tfschema.NestedBlockType, prior, config
 	case prior == nil:
 		action = Create
 	}
+	path := make(cty.Path, 0, len(b.basePath)+len(subPath))
+	path = append(path, b.basePath...)
+	path = append(path, subPath...)
 	return &planBuilder{
-		action:  action,
-		prior:   prior,
-		config:  config,
-		planned: planned,
+		action:          action,
+		schema:          &schema.Content,
+		basePath:        path,
+		prior:           prior,
+		config:          config,
+		planned:         planned,
+		requiresReplace: b.requiresReplace,
 	}
 }

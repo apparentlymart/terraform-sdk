@@ -49,7 +49,7 @@ func (rt legacyManagedResourceType) refresh(ctx context.Context, client interfac
 	panic("not implemented")
 }
 
-func (rt legacyManagedResourceType) planChange(ctx context.Context, client interface{}, prior, config, proposed cty.Value) (cty.Value, Diagnostics) {
+func (rt legacyManagedResourceType) planChange(ctx context.Context, client interface{}, prior, config, proposed cty.Value) (cty.Value, cty.PathSet, Diagnostics) {
 	// TODO: Implement
 	panic("not implemented")
 }

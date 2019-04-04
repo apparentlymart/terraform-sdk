@@ -261,7 +261,7 @@ func (s *tfplugin5Server) PlanResourceChange(ctx context.Context, req *tfplugin5
 	}
 
 	stoppableCtx := s.stoppableContext(ctx)
-	plannedVal, diags := s.p.planResourceChange(stoppableCtx, rt, priorVal, configVal, proposedVal)
+	plannedVal, requiresReplace, diags := s.p.planResourceChange(stoppableCtx, rt, priorVal, configVal, proposedVal)
 
 	// Safety check
 	wantTy := schema.ImpliedCtyType()
@@ -274,6 +274,7 @@ func (s *tfplugin5Server) PlanResourceChange(ctx context.Context, req *tfplugin5
 	}
 
 	resp.PlannedState = encodeTFPlugin5DynamicValue(plannedVal, schema)
+	resp.RequiresReplace = encodeAttrPathSetToTFPlugin5(requiresReplace)
 	resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
 	return resp, nil
 }

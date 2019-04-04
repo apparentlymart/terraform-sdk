@@ -34,7 +34,7 @@ type ManagedResourceType interface {
 	validate(obj cty.Value) Diagnostics
 	upgradeState(oldJSON []byte, oldVersion int) (cty.Value, Diagnostics)
 	refresh(ctx context.Context, client interface{}, old cty.Value) (cty.Value, Diagnostics)
-	planChange(ctx context.Context, client interface{}, prior, config, proposed cty.Value) (cty.Value, Diagnostics)
+	planChange(ctx context.Context, client interface{}, prior, config, proposed cty.Value) (planned cty.Value, requiresReplace cty.PathSet, diags Diagnostics)
 	applyChange(ctx context.Context, client interface{}, prior, planned cty.Value) (cty.Value, Diagnostics)
 	importState(ctx context.Context, client interface{}, id string) (cty.Value, Diagnostics)
 }
@@ -100,7 +100,7 @@ func (p *Provider) readDataSource(ctx context.Context, rt DataResourceType, conf
 	return rt.read(ctx, p.client, configVal)
 }
 
-func (p *Provider) planResourceChange(ctx context.Context, rt ManagedResourceType, priorVal, configVal, proposedVal cty.Value) (cty.Value, Diagnostics) {
+func (p *Provider) planResourceChange(ctx context.Context, rt ManagedResourceType, priorVal, configVal, proposedVal cty.Value) (cty.Value, cty.PathSet, Diagnostics) {
 	return rt.planChange(ctx, p.client, priorVal, configVal, proposedVal)
 }
 

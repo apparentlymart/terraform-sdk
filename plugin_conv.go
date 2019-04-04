@@ -187,3 +187,12 @@ func encodeAttrPathToTFPlugin5(path cty.Path) *tfplugin5.AttributePath {
 	}
 	return ret
 }
+
+func encodeAttrPathSetToTFPlugin5(s cty.PathSet) []*tfplugin5.AttributePath {
+	l := s.List()
+	ret := make([]*tfplugin5.AttributePath, len(l))
+	for i, path := range l {
+		ret[i] = encodeAttrPathToTFPlugin5(path)
+	}
+	return ret
+}

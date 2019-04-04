@@ -76,7 +76,7 @@ func instanceManagedResourceType() tfsdk.ManagedResourceType {
 			},
 		},
 
-		PlanFn: func(ctx context.Context, client *Client, plan tfobj.PlanBuilder) (cty.Value, tfsdk.Diagnostics) {
+		PlanFn: func(ctx context.Context, client *Client, plan tfobj.PlanBuilder) (cty.Value, cty.PathSet, tfsdk.Diagnostics) {
 			prior, planned := plan.AttrChange("type")
 			log.Printf("'type' value was %#v and is now %#v", prior, planned)
 			switch plan.Action() {
@@ -87,7 +87,7 @@ func instanceManagedResourceType() tfsdk.ManagedResourceType {
 					plan.SetAttrUnknown("version") // we'll allocate a new version at apply time
 				}
 			}
-			return plan.ObjectVal(), nil
+			return plan.ObjectVal(), plan.RequiresReplace(), nil
 		},
 		ReadFn: func(ctx context.Context, client *Client, current *instanceMRT) (*instanceMRT, tfsdk.Diagnostics) {
 			log.Printf("reading %#v", current)

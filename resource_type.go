@@ -73,7 +73,7 @@ type ResourceTypeDef struct {
 	// to a planned change for an instance. It must be a function compatible
 	// with the following signature:
 	//
-	//     func (ctx context.Context, client interface{}, plan tfobj.PlanBuilder) (planned cty.Value, diags tfsdk.Diagnostics)
+	//     func (ctx context.Context, client interface{}, plan tfobj.PlanBuilder) (planned cty.Value, requiresReplace cty.PathSet, diags tfsdk.Diagnostics)
 	//
 	// If possible, the provider should also perform validation of the planned
 	// change and return errors or warnings early, rather than waiting until
@@ -198,8 +198,9 @@ func (rt managedResourceType) refresh(ctx context.Context, client interface{}, c
 	return newVal, diags
 }
 
-func (rt managedResourceType) planChange(ctx context.Context, client interface{}, prior, config, proposed cty.Value) (cty.Value, Diagnostics) {
+func (rt managedResourceType) planChange(ctx context.Context, client interface{}, prior, config, proposed cty.Value) (cty.Value, cty.PathSet, Diagnostics) {
 	var diags Diagnostics
+	requiresReplace := cty.NewPathSet()
 	wantTy := rt.configSchema.ImpliedCtyType()
 
 	// Terraform Core has already done a lot of the work in merging prior with
@@ -213,18 +214,18 @@ func (rt managedResourceType) planChange(ctx context.Context, client interface{}
 		// side-effects of the configuration change that could affect any
 		// pre-existing computed attribute values.
 		planBuilder := tfobj.NewPlanBuilder(rt.configSchema, prior, config, planned)
-		fn, err := dynfunc.WrapFunctionWithReturnValueCty(rt.planFn, wantTy, ctx, client, planBuilder)
+		fn, err := dynfunc.WrapFunctionWithReturnValueCtyAndPathSet(rt.planFn, wantTy, ctx, client, planBuilder)
 		if err != nil {
 			diags = diags.Append(Diagnostic{
 				Severity: Error,
 				Summary:  "Invalid provider implementation",
 				Detail:   fmt.Sprintf("Invalid PlanFn: %s.\nThis is a bug in the provider that should be reported in its own issue tracker.", err),
 			})
-			return rt.configSchema.Null(), diags
+			return rt.configSchema.Null(), requiresReplace, diags
 		}
 
 		var moreDiags Diagnostics
-		planned, moreDiags = fn()
+		planned, requiresReplace, moreDiags = fn()
 		diags = diags.Append(moreDiags)
 
 		// We'll make life easier on the provider implementer by normalizing null
@@ -238,7 +239,7 @@ func (rt managedResourceType) planChange(ctx context.Context, client interface{}
 		}
 	}
 
-	return planned, diags
+	return planned, requiresReplace, diags
 }
 
 func (rt managedResourceType) applyChange(ctx context.Context, client interface{}, prior, planned cty.Value) (cty.Value, Diagnostics) {
