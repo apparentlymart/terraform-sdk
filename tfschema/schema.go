@@ -89,6 +89,7 @@ type NestingMode int
 const (
 	nestingInvalid NestingMode = iota
 	NestingSingle
+	NestingGroup
 	NestingList
 	NestingMap
 	NestingSet
@@ -148,7 +149,7 @@ func (b *BlockType) ImpliedCtyType() cty.Type {
 
 func (b *NestedBlockType) impliedCtyType() cty.Type {
 	nested := b.Content.ImpliedCtyType()
-	if b.Nesting == NestingSingle {
+	if b.Nesting == NestingSingle || b.Nesting == NestingGroup {
 		return nested // easy case
 	}
 
@@ -218,7 +219,7 @@ func (b *BlockType) ApplyDefaults(given cty.Value) cty.Value {
 func (b *NestedBlockType) ApplyDefaults(given cty.Value) cty.Value {
 	wantTy := b.impliedCtyType()
 	switch b.Nesting {
-	case NestingSingle:
+	case NestingSingle, NestingGroup:
 		if given.IsNull() {
 			return given
 		}

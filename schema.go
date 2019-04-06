@@ -34,6 +34,14 @@ func ValidateBlockObject(schema *tfschema.BlockType, val cty.Value) Diagnostics 
 	for name, attrS := range schema.Attributes {
 		path := path.GetAttr(name)
 		av := val.GetAttr(name)
+		if av.IsNull() && attrS.Required {
+			diags = diags.Append(Diagnostic{
+				Severity: Error,
+				Summary:  "Missing required argument",
+				Detail:   fmt.Sprintf("The argument %q must be set.", name),
+			})
+			continue
+		}
 		attrDiags := ValidateAttrValue(attrS, av)
 		diags = diags.Append(attrDiags.UnderPath(path))
 	}
@@ -43,7 +51,7 @@ func ValidateBlockObject(schema *tfschema.BlockType, val cty.Value) Diagnostics 
 		av := val.GetAttr(name)
 
 		switch blockS.Nesting {
-		case tfschema.NestingSingle:
+		case tfschema.NestingSingle, tfschema.NestingGroup:
 			if !av.IsNull() {
 				blockDiags := ValidateBlockObject(&blockS.Content, av)
 				diags = diags.Append(blockDiags.UnderPath(path))

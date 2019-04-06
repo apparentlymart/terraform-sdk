@@ -10,14 +10,15 @@ func _() {
 	var x [1]struct{}
 	_ = x[nestingInvalid-0]
 	_ = x[NestingSingle-1]
-	_ = x[NestingList-2]
-	_ = x[NestingMap-3]
-	_ = x[NestingSet-4]
+	_ = x[NestingGroup-2]
+	_ = x[NestingList-3]
+	_ = x[NestingMap-4]
+	_ = x[NestingSet-5]
 }
 
-const _NestingMode_name = "nestingInvalidNestingSingleNestingListNestingMapNestingSet"
+const _NestingMode_name = "nestingInvalidNestingSingleNestingGroupNestingListNestingMapNestingSet"
 
-var _NestingMode_index = [...]uint8{0, 14, 27, 38, 48, 58}
+var _NestingMode_index = [...]uint8{0, 14, 27, 39, 50, 60, 70}
 
 func (i NestingMode) String() string {
 	if i < 0 || i >= NestingMode(len(_NestingMode_index)-1) {

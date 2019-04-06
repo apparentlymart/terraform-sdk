@@ -389,8 +389,8 @@ func (b *planBuilder) BlockBuilderFromMap(typeName string, key string) ObjectBui
 
 func (b *planBuilder) BlockPlanBuilderSingle(typeName string) PlanBuilder {
 	blockS, ok := b.Schema().NestedBlockTypes[typeName]
-	if !ok || blockS.Nesting != tfschema.NestingSingle {
-		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingSingle", typeName))
+	if !ok || (blockS.Nesting != tfschema.NestingSingle && blockS.Nesting != tfschema.NestingGroup) {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingSingle or tfschema.NestingGroup", typeName))
 	}
 
 	var priorReader, configReader ObjectReader

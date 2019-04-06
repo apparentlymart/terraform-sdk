@@ -106,7 +106,7 @@ func (r *objectReaderVal) BlockCount(blockType string) int {
 
 func (r *objectReaderVal) BlockSingle(blockType string) ObjectReader {
 	blockS, obj := r.blockVal(blockType)
-	if blockS.Nesting != tfschema.NestingSingle {
+	if blockS.Nesting != tfschema.NestingSingle && blockS.Nesting != tfschema.NestingGroup {
 		panic(fmt.Sprintf("attempt to read block type %q (%s) with BlockSingle method", blockType, blockS.Nesting))
 	}
 	return &objectReaderVal{

@@ -41,6 +41,8 @@ func convertSchemaBlockToTFPlugin5(src *tfschema.BlockType) *tfplugin5.Schema_Bl
 		switch blockS.Nesting {
 		case tfschema.NestingSingle:
 			nesting = tfplugin5.Schema_NestedBlock_SINGLE
+		case tfschema.NestingGroup:
+			nesting = tfplugin5.Schema_NestedBlock_GROUP
 		case tfschema.NestingList:
 			nesting = tfplugin5.Schema_NestedBlock_LIST
 		case tfschema.NestingMap:

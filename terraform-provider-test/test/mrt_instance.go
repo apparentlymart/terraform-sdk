@@ -53,12 +53,13 @@ func instanceManagedResourceType() tfsdk.ManagedResourceType {
 					},
 				},
 				"access": {
-					Nesting: tfschema.NestingSingle,
+					Nesting: tfschema.NestingGroup,
 					Content: tfschema.BlockType{
 						Attributes: map[string]*tfschema.Attribute{
 							"policy": {
 								Type:     cty.DynamicPseudoType,
-								Required: true,
+								Optional: true,
+								Default:  cty.EmptyObjectVal,
 
 								ValidateFn: func(val cty.Value) tfsdk.Diagnostics {
 									var diags tfsdk.Diagnostics

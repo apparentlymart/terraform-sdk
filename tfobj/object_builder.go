@@ -128,7 +128,7 @@ func newObjectBuilder(schema *tfschema.BlockType, initial cty.Value) *objectBuil
 
 	for name, blockS := range schema.NestedBlockTypes {
 		switch blockS.Nesting {
-		case tfschema.NestingSingle:
+		case tfschema.NestingSingle, tfschema.NestingGroup:
 			if initial == cty.NilVal {
 				ret.singleBlocks[name] = nil
 				continue
@@ -331,8 +331,8 @@ func (b *objectBuilder) BlockFromMap(typeName string, key string) ObjectReader {
 }
 
 func (b *objectBuilder) BlockBuilderSingle(typeName string) ObjectBuilder {
-	if blockS, ok := b.schema.NestedBlockTypes[typeName]; !ok || blockS.Nesting != tfschema.NestingSingle {
-		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingSingle", typeName))
+	if blockS, ok := b.schema.NestedBlockTypes[typeName]; !ok || (blockS.Nesting != tfschema.NestingSingle && blockS.Nesting != tfschema.NestingGroup) {
+		panic(fmt.Sprintf("%q is not a nested block type of tfschema.NestingSingle or tfschema.NestingGroup", typeName))
 	}
 	ret := b.singleBlocks[typeName]
 	if ret == nil {
