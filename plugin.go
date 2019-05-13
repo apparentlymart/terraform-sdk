@@ -2,14 +2,17 @@ package tfsdk
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
-	"net/rpc"
-
-	plugin "github.com/hashicorp/go-plugin"
-	"google.golang.org/grpc"
-	grpcCodes "google.golang.org/grpc/codes"
+	"log"
+	"net"
+	"os"
 
 	"github.com/apparentlymart/terraform-sdk/internal/tfplugin5"
+	"go.rpcplugin.org/rpcplugin"
+	"go.rpcplugin.org/rpcplugin/plugintrace"
+	"google.golang.org/grpc"
+	grpcCodes "google.golang.org/grpc/codes"
 )
 
 // ServeProviderPlugin starts a plugin server for the given provider, which will
@@ -20,20 +23,26 @@ import (
 // ServeProviderPlugin returns only once the plugin has been requested to exit
 // by its client.
 func ServeProviderPlugin(p *Provider) {
-	impls := map[int]plugin.PluginSet{
-		4: {
-			"provider": unsupportedProtocolVersion4{},
+	ctx := plugintrace.WithServerTracer(context.Background(), &plugintrace.ServerTracer{
+		Listening: func(addr net.Addr, tlsConfig *tls.Config, protoVersion int) {
+			log.Printf("[INFO] provider plugin server (protocol %d) listening on %s", protoVersion, addr)
 		},
-		5: {
-			"provider": protocolVersion5{p},
-		},
-	}
-
-	plugin.Serve(&plugin.ServeConfig{
-		HandshakeConfig:  pluginHandshake,
-		VersionedPlugins: impls,
-		GRPCServer:       plugin.DefaultGRPCServer,
 	})
+
+	err := rpcplugin.Serve(ctx, &rpcplugin.ServerConfig{
+		Handshake: rpcplugin.HandshakeConfig{
+			CookieKey:   "TF_PLUGIN_MAGIC_COOKIE",
+			CookieValue: "d602bf8f470bc67ca7faa0386276bbdd4330efaf76d1a219cb4d6991ca9872b2",
+		},
+		ProtoVersions: map[int]rpcplugin.Server{
+			5: protocolVersion5{p},
+		},
+	})
+
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
 }
 
 func (p *Provider) tfplugin5Server() tfplugin5.ProviderServer {
@@ -377,58 +386,15 @@ func (s *tfplugin5Server) stoppableContext(ctx context.Context) context.Context 
 	return stoppable
 }
 
-// protocolVersion5 is an implementation of both plugin.Plugin and
-// plugin.GRPCPlugin that implements protocol version 5.
+// protocolVersion5 is an implementation of rpcplugin.Server that implements
+// protocol version 5.
 type protocolVersion5 struct {
 	p *Provider
 }
 
-var _ plugin.GRPCPlugin = protocolVersion5{}
+var _ rpcplugin.Server = protocolVersion5{}
 
-func (p protocolVersion5) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientConn) (interface{}, error) {
-	return nil, fmt.Errorf("Terraform SDK can only be used to implement plugin servers, not plugin clients")
-}
-
-func (p protocolVersion5) GRPCServer(broker *plugin.GRPCBroker, server *grpc.Server) error {
+func (p protocolVersion5) RegisterServer(server *grpc.Server) error {
 	tfplugin5.RegisterProviderServer(server, p.p.tfplugin5Server())
 	return nil
-}
-
-func (p protocolVersion5) Client(*plugin.MuxBroker, *rpc.Client) (interface{}, error) {
-	return nil, fmt.Errorf("net/rpc is not valid in protocol version 5")
-}
-
-func (p protocolVersion5) Server(*plugin.MuxBroker) (interface{}, error) {
-	return nil, fmt.Errorf("net/rpc is not valid in protocol version 5")
-}
-
-// unsupportedProtocolVersion4 is an implementation of plugin.Plugin that just
-// returns an error stating that the plugin requires Terraform v0.12.0 or later.
-type unsupportedProtocolVersion4 struct{}
-
-func (p unsupportedProtocolVersion4) Client(*plugin.MuxBroker, *rpc.Client) (interface{}, error) {
-	return nil, fmt.Errorf("Terraform SDK can only be used to implement plugin servers, not plugin clients")
-}
-
-func (p unsupportedProtocolVersion4) Server(*plugin.MuxBroker) (interface{}, error) {
-	return nil, fmt.Errorf("this plugin requires Terraform v0.12.0 or later")
-}
-
-var pluginHandshake = plugin.HandshakeConfig{
-	// ProtocolVersion is a legacy setting used to set the default protocol
-	// version for clients (old Terraform versions) that do not explicitly
-	// specify which protocol versions they support.
-	//
-	// Protocol version 4 is no longer supported, so in practice any client
-	// that does not explicitly select a later version is automatically
-	// incompatible with plugins compiled with this SDK version.
-	//
-	// (The VersionedPlugins field passed to plugin.Serve above is what
-	// actually handles our version negotation.)
-	ProtocolVersion: 4,
-
-	// The magic cookie values must not be changed, or else a plugin will
-	// not correctly recognize that is running as a child process of Terraform.
-	MagicCookieKey:   "TF_PLUGIN_MAGIC_COOKIE",
-	MagicCookieValue: "d602bf8f470bc67ca7faa0386276bbdd4330efaf76d1a219cb4d6991ca9872b2",
 }
