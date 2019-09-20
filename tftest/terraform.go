@@ -1,6 +1,8 @@
 package tftest
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -60,4 +62,39 @@ func (wd *WorkingDir) runTerraform(args ...string) error {
 		err = fmt.Errorf("terraform failed: %s\n\nstderr:\n%s", tErr.ProcessState.String(), errBuf.String())
 	}
 	return err
+}
+
+// runTerraformJSON runs the configured Terraform CLI executable with the given
+// arguments and tries to decode its stdout into the given target value (which
+// must be a non-nil pointer) as JSON.
+func (wd *WorkingDir) runTerraformJSON(target interface{}, args ...string) error {
+	allArgs := []string{"terraform"}
+	allArgs = append(allArgs, args...)
+
+	var env []string
+	for _, e := range os.Environ() {
+		env = append(env, e)
+	}
+	env = append(env, "TF_INPUT=0")
+	env = append(env, "TF_LOG=") // so logging can't pollute our stderr output
+
+	var outBuf bytes.Buffer
+	var errBuf strings.Builder
+
+	cmd := &exec.Cmd{
+		Path:   wd.h.TerraformExecPath(),
+		Args:   allArgs,
+		Dir:    wd.baseDir,
+		Stderr: &errBuf,
+		Stdout: &outBuf,
+	}
+	err := cmd.Run()
+	if err != nil {
+		if tErr, ok := err.(*exec.ExitError); ok {
+			err = fmt.Errorf("terraform failed: %s\n\nstderr:\n%s", tErr.ProcessState.String(), errBuf.String())
+		}
+		return err
+	}
+
+	return json.Unmarshal(outBuf.Bytes(), target)
 }

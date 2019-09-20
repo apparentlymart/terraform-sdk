@@ -5,6 +5,8 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+
+	tfjson "github.com/hashicorp/terraform-json"
 )
 
 // WorkingDir represents a distinct working directory that can be used for
@@ -169,13 +171,6 @@ func (wd *WorkingDir) RequireCreatePlan(t TestControl) {
 	}
 }
 
-// HasSavedPlan returns true if there is a saved plan in the working directory. If
-// so, a subsequent call to Apply will apply that saved plan.
-func (wd *WorkingDir) HasSavedPlan() bool {
-	_, err := os.Stat(wd.planFilename())
-	return err == nil
-}
-
 // Apply runs "terraform apply". If Plan has previously completed successfully
 // and the saved plan has not been cleared in the meantime then ths will apply
 // the saved plan. Otherwise, it will implicitly create a new plan and apply it.
@@ -185,8 +180,8 @@ func (wd *WorkingDir) Apply() error {
 		args = append(args, "tfplan")
 	} else {
 		args = append(args, "-auto-approve")
+		args = append(args, wd.configDir)
 	}
-	args = append(args, wd.configDir)
 	return wd.runTerraform(args...)
 }
 
@@ -198,4 +193,70 @@ func (wd *WorkingDir) RequireApply(t TestControl) {
 		t := testingT{t}
 		t.Fatalf("failed to apply: %s", err)
 	}
+}
+
+// HasSavedPlan returns true if there is a saved plan in the working directory. If
+// so, a subsequent call to Apply will apply that saved plan.
+func (wd *WorkingDir) HasSavedPlan() bool {
+	_, err := os.Stat(wd.planFilename())
+	return err == nil
+}
+
+// SavedPlan returns an object describing the current saved plan file, if any.
+//
+// If no plan is saved or if the plan file cannot be read, SavedPlan returns
+// an error.
+func (wd *WorkingDir) SavedPlan() (*tfjson.Plan, error) {
+	if !wd.HasSavedPlan() {
+		return nil, fmt.Errorf("there is no current saved plan")
+	}
+
+	var ret tfjson.Plan
+	err := wd.runTerraformJSON(&ret, "show", "-json", wd.planFilename())
+	if err != nil {
+		return nil, err
+	}
+	if err := ret.Validate(); err != nil {
+		return nil, err
+	}
+	return &ret, nil
+}
+
+// RequireSavedPlan is a variant of SavedPlan that will fail the test via
+// the given TestControl if the plan cannot be read.
+func (wd *WorkingDir) RequireSavedPlan(t TestControl) *tfjson.Plan {
+	t.Helper()
+	ret, err := wd.SavedPlan()
+	if err != nil {
+		t := testingT{t}
+		t.Fatalf("failed to read saved plan: %s", err)
+	}
+	return ret
+}
+
+// State returns an object describing the current state.
+//
+// If the state cannot be read, State returns an error.
+func (wd *WorkingDir) State() (*tfjson.State, error) {
+	var ret tfjson.State
+	err := wd.runTerraformJSON(&ret, "show", "-json")
+	if err != nil {
+		return nil, err
+	}
+	if err := ret.Validate(); err != nil {
+		return nil, err
+	}
+	return &ret, nil
+}
+
+// RequireState is a variant of State that will fail the test via
+// the given TestControl if the state cannot be read.
+func (wd *WorkingDir) RequireState(t TestControl) *tfjson.State {
+	t.Helper()
+	ret, err := wd.State()
+	if err != nil {
+		t := testingT{t}
+		t.Fatalf("failed to read state plan: %s", err)
+	}
+	return ret
 }
