@@ -85,6 +85,23 @@ func encodeTFPlugin5DynamicValue(src cty.Value, schema *tfschema.BlockType) *tfp
 	}
 }
 
+func decodeTFPlugin5RawState(src *tfplugin5.RawState, schema *tfschema.BlockType) (cty.Value, Diagnostics) {
+	switch {
+	case len(src.Json) > 0:
+		return decodeJSONObject(src.Json, schema)
+	default:
+		diags := Diagnostics{
+			{
+				Severity: Error,
+				Summary:  "Can't upgrade legacy state",
+				// FIXME: Terrible unactionable error message
+				Detail: "The state for this object is in a legacy format that is no longer supported. You must first apply a change to it with an older version of the provider.",
+			},
+		}
+		return cty.DynamicVal, diags
+	}
+}
+
 func decodeJSONObject(src []byte, schema *tfschema.BlockType) (cty.Value, Diagnostics) {
 	var diags Diagnostics
 	wantTy := schema.ImpliedCtyType()

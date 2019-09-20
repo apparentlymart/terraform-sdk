@@ -192,8 +192,29 @@ func (s *tfplugin5Server) ValidateDataSourceConfig(ctx context.Context, req *tfp
 	return resp, nil
 }
 
-func (s *tfplugin5Server) UpgradeResourceState(context.Context, *tfplugin5.UpgradeResourceState_Request) (*tfplugin5.UpgradeResourceState_Response, error) {
-	return nil, grpc.Errorf(grpcCodes.Unimplemented, "not implemented")
+func (s *tfplugin5Server) UpgradeResourceState(ctx context.Context, req *tfplugin5.UpgradeResourceState_Request) (*tfplugin5.UpgradeResourceState_Response, error) {
+	// TODO: Do some fixups we can do automatically, like transforming primitive
+	// types, and then give the provider code an opportunity to do its own
+	// fixups as needed.
+	// Might also need to deal with converting flatmap to JSON here, but maybe
+	// flatmap states will be rare enough that it's okay to just fail those?
+
+	resp := &tfplugin5.UpgradeResourceState_Response{}
+
+	var rt ManagedResourceType
+	if rt = s.requireManagedResourceType(req.TypeName, &resp.Diagnostics); rt == nil {
+		return resp, nil
+	}
+
+	schema, _ := rt.getSchema()
+	stateVal, diags := decodeTFPlugin5RawState(req.RawState, schema)
+	if diags.HasErrors() {
+		resp.Diagnostics = encodeDiagnosticsToTFPlugin5(diags)
+		return resp, nil
+	}
+
+	resp.UpgradedState = encodeTFPlugin5DynamicValue(stateVal, schema)
+	return resp, nil
 }
 
 func (s *tfplugin5Server) Configure(ctx context.Context, req *tfplugin5.Configure_Request) (*tfplugin5.Configure_Response, error) {
