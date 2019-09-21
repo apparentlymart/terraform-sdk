@@ -4,13 +4,14 @@ import (
 	"os"
 	"testing"
 
-	"github.com/apparentlymart/terraform-sdk/tftest"
+	tfsdk "github.com/apparentlymart/terraform-sdk"
+	tftest "github.com/apparentlymart/terraform-plugin-test"
 )
 
 var testHelper *tftest.Helper
 
 func TestMain(m *testing.M) {
-	testHelper = tftest.InitProvider("test", Provider())
+	testHelper = tfsdk.InitProviderTesting("test", Provider())
 	status := m.Run()
 	testHelper.Close()
 	os.Exit(status)

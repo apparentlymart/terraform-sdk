@@ -3,6 +3,8 @@ github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03
 github.com/apparentlymart/go-ctxenv v1.0.0 h1:bsRTyED+PEcifljxBd/WhXRk/BNhgCigGYGZ0pVP4lM=
 github.com/apparentlymart/go-ctxenv v1.0.0/go.mod h1:Fxo441RKBr/C5JmbNRwdMSAUXs7k8M9ndNHBShdNCE4=
 github.com/apparentlymart/go-textseg v1.0.0/go.mod h1:z96Txxhf3xSFMPmb5X/1W05FF/Nj9VFpLOpjS5yuumk=
+github.com/apparentlymart/terraform-plugin-test v0.0.0-20190921180929-24e04c393f77 h1:YfdrN7Sa/PBxhoEqO+5dP+a+Yj/2joPHO6m5QPEW8n8=
+github.com/apparentlymart/terraform-plugin-test v0.0.0-20190921180929-24e04c393f77/go.mod h1:ywdJcxlX8KNuclunr9Y1Jl8GAYU0ZMbkwViaj9RNvj4=
 github.com/client9/misspell v0.3.4/go.mod h1:qj6jICC3Q7zFZvVWo7KLAzC3yx5G7kyvSDkc90ppPyw=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
