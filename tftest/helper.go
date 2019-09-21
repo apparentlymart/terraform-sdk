@@ -54,6 +54,10 @@ func InitProvider(name string, provider *tfsdk.Provider) *Helper {
 		os.Exit(0)
 	}
 
+	return initProviderHelper(name)
+}
+
+func initProviderHelper(name string) *Helper {
 	helper, err := AutoInitHelper("terraform-provider-" + name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cannot run Terraform provider tests: %s\n", err)
