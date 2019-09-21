@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
+	tftest "github.com/apparentlymart/terraform-plugin-test"
 	tfsdk "github.com/apparentlymart/terraform-sdk"
-	"github.com/apparentlymart/terraform-sdk/tftest"
 )
 
 var testHelper *tftest.Helper

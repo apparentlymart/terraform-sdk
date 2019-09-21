@@ -3,7 +3,7 @@ package tfsdk
 import (
 	"os"
 
-	"github.com/apparentlymart/terraform-sdk/tftest"
+	tftest "github.com/apparentlymart/terraform-plugin-test"
 )
 
 // InitProviderTesting is the main entrypoint for testing provider plugins
