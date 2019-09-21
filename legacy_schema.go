@@ -141,13 +141,6 @@ func prepareLegacySchemaType(legacy *tflegacy.Schema, enableAsSingle bool) cty.T
 			// to be compatible with them.
 			elemType = cty.String
 		}
-		if legacy.AsSingle && enableAsSingle {
-			// In AsSingle mode, we artifically force a TypeList or TypeSet
-			// attribute in the SDK to be treated as a single value by Terraform Core.
-			// This must then be fixed up in the shim code (in helper/plugin) so
-			// that the SDK still sees the lists or sets it's expecting.
-			return elemType
-		}
 		switch legacy.Type {
 		case tflegacy.TypeList:
 			return cty.List(elemType)
@@ -184,14 +177,6 @@ func prepareLegacySchemaNestedBlockType(legacy *tflegacy.Schema, enableAsSingle 
 
 	ret.MinItems = legacy.MinItems
 	ret.MaxItems = legacy.MaxItems
-
-	if legacy.AsSingle && enableAsSingle {
-		// In AsSingle mode, we artifically force a TypeList or TypeSet
-		// attribute in the SDK to be treated as a single block by Terraform Core.
-		// This must then be fixed up in the shim code (in helper/plugin) so
-		// that the SDK still sees the lists or sets it's expecting.
-		ret.Nesting = tfschema.NestingSingle
-	}
 
 	if legacy.Required && legacy.MinItems == 0 {
 		// new schema doesn't have a "required" representation for nested
